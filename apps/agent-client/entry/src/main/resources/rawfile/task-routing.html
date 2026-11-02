@@ -26,6 +26,9 @@
 .flow-memory{width:200px}.flow-memory>i{height:18px;border-radius:9px}
 .flow-memory>span{font-size:26px;line-height:32px}.flow-memory b{font-weight:700}
 .flow-lane h3{font-size:30px;line-height:36px}.flow-idle{font-size:25px}
+.flow-compute.is-pending{border-style:dashed;background:#F7F9FB;box-shadow:none}
+.flow-compute.is-pending .flow-lane h3,.flow-compute.is-pending .flow-computer small{color:#626B85}
+.flow-pending-note{margin:8px 0 0;font-size:24px;line-height:1.5;color:#626B85;overflow-wrap:anywhere}
 .flow-task>span{font-size:28px}.flow-task b{font-size:42px}
 .flow-compute.is-computing{background:#F8FBFF;border-color:#BDCEE4;box-shadow:0 4px 14px #3B61951A,0 1px 3px #3B61950D;animation:compute-breathe 4s ease-in-out infinite}
 .flow-compute.is-computing .flow-computer{color:#244238}
@@ -224,6 +227,7 @@ function allCalls(){return jobs.concat(remoteCalls);}
         const boxes=rows.map(row=>{
           const d=row.device;
           if(d.role==='cloud')return '<section class="flow-compute flow-cloud" data-row-key="cloud-executor" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="云端路由"><div class="flow-computer"><svg class="flow-cloud-icon" viewBox="0 0 100 72" aria-hidden="true"><path d="M25 57h52a15 15 0 0 0 1-30 25 25 0 0 0-48-7 18 18 0 0 0-5 37Z"/><path d="M39 39h22m-7-7 7 7-7 7"/></svg><span>云端推理</span><small>已路由至云端</small></div><div class="flow-lane busy"><h3>推理中 · '+row.active.length+' 个任务</h3>'+row.active.map(flowCard).join('')+'</div></section>';
+          if(d.pendingInfo)return '<section class="flow-compute is-pending" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="算力设备，信息待同步"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#flow-pc"/></svg></div><span>算力设备</span><small>已计入在线总数</small></div><div class="flow-lane"><h3>信息待同步</h3><p class="flow-pending-note">等待路由中心同步<br>设备名称与模型</p></div></section>';
           const mem=typeof d.memUsage==='number'&&Number.isFinite(d.memUsage)&&d.memUsage>=0?Math.min(100,d.memUsage):null;
           const memory='<div class="flow-memory" aria-label="内存 '+(mem===null?'未采集':mem+'%')+'"><i><em style="width:'+(mem===null?0:mem)+'%;background:'+(mem>50?'#e1b43b':'#279a73')+'"></em></i><span>内存<b>'+(mem===null?'—':Math.round(mem)+'%')+'</b></span></div>';
           return '<section class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#flow-pc"/></svg>'+(d.role==='self'?'<span class="flow-pc-local">本机</span>':'')+'</div><span title="'+esc(computeDisplayName(d))+'">'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'推理中':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';

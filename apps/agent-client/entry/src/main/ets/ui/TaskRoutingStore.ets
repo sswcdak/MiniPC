@@ -2,7 +2,7 @@ import { DeviceInfoEntry, RoutingCall, WireMessage } from '../protocol/ChatProto
 
 interface RouteDevice {
   id: string; name: string; role: string; ready: boolean; jobs: number;
-  model?: string; memUsage?: number; capabilities?: string[];
+  model?: string; memUsage?: number; capabilities?: string[]; pendingInfo?: boolean;
 }
 interface FlowNotice {
   key: string; revision: number; kind: string; phase: string; source: string; origin: string;
@@ -37,6 +37,7 @@ export class TaskRoutingStore {
   private flows: Map<string, FlowEntry> = new Map();
   private revisions: Map<string, number> = new Map();
   private epoch: number = -1;
+  private hasRoster: boolean = false;
   receive(message: WireMessage, epoch: number, connectedHub: DeviceInfoEntry | null = null): void {
     if (message.type !== 'deviceInfoSync' && message.type !== 'deviceInfo') { return; }
     if (this.epoch >= 0 && this.epoch !== epoch) { this.clear(); }
@@ -44,6 +45,7 @@ export class TaskRoutingStore {
       if (!Array.isArray(message.devices)) { return; }
       const previous = this.roster;
       this.epoch = epoch;
+      this.hasRoster = true;
       // A compact roster is authoritative about membership, not absent telemetry.
       this.roster = message.devices.slice(0, 16).map((device: DeviceInfoEntry): DeviceInfoEntry => {
         const id = device.deviceUid || device.id;
@@ -92,8 +94,8 @@ export class TaskRoutingStore {
       this.flows.set(notice.key, { notice: notice, receivedAt: Date.now() });
     }
   }
-  clear(): void { this.roster = []; this.epoch = -1; this.flows.clear(); this.revisions.clear(); }
-  snapshot(calls: RoutingCall[], selfLabel: string, selfUid: string, connected: boolean, readyEpoch: number, connectedHub: DeviceInfoEntry | null = null): string {
+  clear(): void { this.roster = []; this.epoch = -1; this.hasRoster = false; this.flows.clear(); this.revisions.clear(); }
+  snapshot(calls: RoutingCall[], selfLabel: string, selfUid: string, connected: boolean, readyEpoch: number, connectedHub: DeviceInfoEntry | null = null, reportedTotal: number = 0): string {
     if (!connected || (this.epoch >= 0 && this.epoch !== readyEpoch)) { this.clear(); }
     const devices: RouteDevice[] = this.roster.map((device: DeviceInfoEntry, index: number): RouteDevice => ({
       id: device.deviceUid || device.id || 'roster-' + index, name: device.slot !== undefined && device.slot > 0 ?
@@ -138,6 +140,17 @@ export class TaskRoutingStore {
         job.executorId = evidence.notice.executorId;
       }
       if (call.phase === 'queued') { queued.push(job); } else { jobs.push(job); }
+    }
+    // Older hubs report the cluster size without publishing device identities.
+    // Keep that missing information visible without assigning slots or tasks to it.
+    // Once a full roster arrives, its membership wins over an older load summary.
+    if (connected && readyEpoch >= 0 && !this.hasRoster && Number.isSafeInteger(reportedTotal)) {
+      const known = devices.filter((device: RouteDevice): boolean => device.role === 'compute').length;
+      const missing = Math.max(0, Math.min(16, reportedTotal) - known);
+      for (let index = 0; index < missing; index++) {
+        devices.push({ id: 'pending-roster:' + readyEpoch + ':' + index, name: '算力设备',
+          role: 'compute', ready: false, jobs: 0, pendingInfo: true });
+      }
     }
     const mirrors: RouteJob[] = [];
     for (const entry of this.flows.values()) {

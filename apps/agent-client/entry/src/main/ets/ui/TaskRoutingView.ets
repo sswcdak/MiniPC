@@ -30,7 +30,8 @@ export struct TaskRoutingView {
     const payload = this.eventJson;
     const script = '(()=>{const event=' + payload + ';window.onNativeEvent(event);' +
       'return JSON.stringify({inputComputes:(event.devices||[]).filter(d=>d.role===\"compute\"||d.role===\"self\").length,' +
-      'cards:document.querySelectorAll(\".flow-compute:not(.flow-cloud)\").length});})()';
+      'cards:document.querySelectorAll(\".flow-compute:not(.flow-cloud)\").length,' +
+      'pendingCards:document.querySelectorAll(\".flow-compute.is-pending\").length});})()';
     this.pending = false; this.applying = true;
     Promise.resolve().then((): Promise<string> => this.controller.runJavaScript(script)).then((result: string): void => {
       if (epoch !== this.pageEpoch || !this.loaded) { return; }

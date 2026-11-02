@@ -531,7 +531,8 @@ struct Index {
   private refreshRoutingView(): void {
     this.deviceInfoPoller.poll(this.pageActive ? nearbyChannel.readyEpoch() : -1);
     this.routingJson = this.routingStore.snapshot(inferenceClient.routingCalls(), nearbyChannel.selfLabel(),
-      nearbyChannel.localUid(), nearbyChannel.isConnected(), nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo());
+      nearbyChannel.localUid(), nearbyChannel.isConnected(), nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo(),
+      inferenceClient.clusterLoad().total);
   }
 
   private initializeTabletSessions(): void {
