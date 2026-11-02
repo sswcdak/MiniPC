@@ -38,6 +38,9 @@
     .status.err { color:var(--err); background:rgba(196,71,58,.1); }
     .connect { flex-shrink:0; border:0; border-radius:16px; padding:8px 12px; background:#fff; color:var(--accent); font-size:13px; font-weight:650; cursor:pointer; }
     .connect:disabled { opacity:.45; cursor:default; }
+    .app-tabs { display:flex; gap:3px; padding:3px; border-radius:13px; background:#fff; }
+    .app-tab { border:0; border-radius:10px; padding:7px 10px; background:transparent; color:var(--muted); font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
+    .app-tab.active { background:rgba(61,91,219,.12); color:var(--accent); }
     .gear { margin-left:auto; width:36px; height:36px; padding:0; border-radius:18px; font-size:18px; line-height:1; }
     .clear-tasks { margin-left:8px; border:0; border-radius:12px; padding:2px 10px; background:#fff; color:var(--accent); font-size:12px; font-weight:650; cursor:pointer; }
     .stats { display:flex; gap:8px; }
@@ -56,6 +59,11 @@
     .usage-reset { background:#fff; color:var(--accent); border:1px solid var(--line); }
     .model-apply:disabled { opacity:.45; cursor:default; }
     .model-hint { margin:10px 0 0; font-size:13px; color:var(--muted); line-height:1.5; }
+    .llama-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+    .llama-metric { padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:#fff; }
+    .llama-metric span { display:block; color:var(--muted); font-size:12px; }
+    .llama-metric b { display:block; margin-top:6px; font-size:18px; overflow-wrap:anywhere; }
+    @media (max-width:720px) { .app-tabs { display:none; } .llama-summary { grid-template-columns:1fr; } }
     .stat { flex:1; max-width:200px; padding:10px 12px; border-radius:16px; background:#fff; display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
     .stat span { font-size:12px; color:var(--muted); }
     .stat b { font-size:20px; font-weight:720; color:var(--ink); }
@@ -263,9 +271,38 @@
     <header>
       <svg class="brand" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="12" fill="#3d5bdb"/><circle cx="11" cy="18" r="3" fill="#fff"/><circle cx="25" cy="12" r="3" fill="#fff"/><circle cx="25" cy="24" r="3" fill="#fff"/><path stroke="#fff" stroke-width="1.6" d="M13.6 16.8 22.4 13.2M13.6 19.2 22.4 22.8"/></svg>
       <div class="head"><h1 id="title">算力</h1><p id="connection" class="status wait" role="status">正在准备…</p></div>
+      <div class="app-tabs" role="tablist" aria-label="应用页面">
+        <button id="tabDashboard" class="app-tab active" type="button" role="tab">算力面板</button>
+        <button id="tabLlama" class="app-tab" type="button" role="tab">Llama 管理</button>
+      </div>
       <button id="openSettings" class="connect gear" type="button" aria-label="设置">⚙</button>
       <button id="connect" class="connect" type="button" disabled>启用近场</button>
     </header>
+    <section id="llamaPanel" class="settings" hidden>
+      <div class="settings-head">
+        <button id="closeLlamaPanel" class="settings-back" type="button">返回算力面板</button>
+        <h2>Llama 管理</h2>
+      </div>
+      <h3 class="settings-label">本机 GGUF 模型</h3>
+      <section class="model-settings">
+        <div class="model-fields">
+          <label class="model-field" for="llamaSelectedModel">当前模型<select id="llamaSelectedModel"></select></label>
+          <button id="llamaImportModel" class="model-apply" type="button">导入 GGUF</button>
+          <button id="llamaApplyModel" class="model-apply" type="button" disabled>应用并预加载</button>
+        </div>
+        <p class="model-hint">模型与算力面板共用同一份选择和沙箱目录。应用后会立即在后台加载，供多机级联请求使用。</p>
+        <p id="llamaModelMessage" class="model-hint" role="status" aria-live="polite"></p>
+      </section>
+      <h3 class="settings-label">推理引擎 · 同进程 Native</h3>
+      <section class="model-settings">
+        <div class="llama-summary">
+          <div class="llama-metric"><span>运行状态</span><b id="llamaState">未加载</b></div>
+          <div class="llama-metric"><span>上下文</span><b id="llamaContext">—</b></div>
+          <div class="llama-metric"><span>模型</span><b id="llamaRuntimeModel">—</b></div>
+        </div>
+        <p id="llamaRuntimeError" class="model-hint"></p>
+      </section>
+    </section>
     <section id="settings" class="settings" hidden>
       <div class="settings-head">
         <button id="closeSettings" class="settings-back" type="button">返回</button>
@@ -275,6 +312,7 @@
       <section id="modelSettings" class="model-settings">
         <div class="model-fields">
           <label class="model-field" for="selectedModel">当前模型<select id="selectedModel"></select></label>
+          <button id="importModel" class="model-apply" type="button">导入 GGUF</button>
           <button id="applyModels" class="model-apply" type="button" disabled>应用选择</button>
         </div>
         <p id="modelHint" class="model-hint">仅列出本机已部署的模型，设置会自动保存。</p>
@@ -379,6 +417,7 @@
     const modelSettingsView=document.getElementById('modelSettings');
     const selectedModelView=document.getElementById('selectedModel');
     const modelHintView=document.getElementById('modelHint');
+    const importModelButton=document.getElementById('importModel');
     const applyModelsButton=document.getElementById('applyModels');
     const modelMessageView=document.getElementById('modelMessage');
     const outputModeView=document.getElementById('outputMode');
@@ -396,10 +435,23 @@
     const routeAlgorithmView=document.getElementById('routeAlgorithm');
     const applyRouteAlgorithmButton=document.getElementById('applyRouteAlgorithm');
     const routeMessageView=document.getElementById('routeMessage');
+    const llamaPanelView=document.getElementById('llamaPanel');
+    const tabDashboardButton=document.getElementById('tabDashboard');
+    const tabLlamaButton=document.getElementById('tabLlama');
+    const closeLlamaPanelButton=document.getElementById('closeLlamaPanel');
+    const llamaSelectedModelView=document.getElementById('llamaSelectedModel');
+    const llamaImportModelButton=document.getElementById('llamaImportModel');
+    const llamaApplyModelButton=document.getElementById('llamaApplyModel');
+    const llamaModelMessageView=document.getElementById('llamaModelMessage');
+    const llamaStateView=document.getElementById('llamaState');
+    const llamaContextView=document.getElementById('llamaContext');
+    const llamaRuntimeModelView=document.getElementById('llamaRuntimeModel');
+    const llamaRuntimeErrorView=document.getElementById('llamaRuntimeError');
     let outputDraft=false;
     let usageDraft=false;
     let routeDraft=false, routeOptionsSignature='';
     let modelState=null, modelStateSignature='', modelDraft=false, modelPollAt=0;
+    let llamaModelDraft=false, llamaModelSignature='', llamaStatusPollAt=0;
     function refreshModels(){
       if(!settingsView||settingsView.hidden||typeof window.chatBridge.models!=='function')return;
       try{renderModelSettings(JSON.parse(window.chatBridge.models()));}catch(error){}
@@ -438,10 +490,43 @@
     }
     function openSettings(){if(!settingsView)return;settingsView.hidden=false;refreshModels();refreshUsage();}
     function closeSettings(){if(settingsView)settingsView.hidden=true;}
+    function setActiveTab(llama){
+      if(tabDashboardButton)tabDashboardButton.classList.toggle('active',!llama);
+      if(tabLlamaButton)tabLlamaButton.classList.toggle('active',llama);
+    }
+    function refreshLlamaStatus(){
+      if(!llamaPanelView||llamaPanelView.hidden||typeof window.chatBridge.llamaStatus!=='function')return;
+      try{
+        const status=JSON.parse(window.chatBridge.llamaStatus());
+        const labels={idle:'未加载',loading:'加载中',ready:'就绪',busy:'推理中',error:'错误'};
+        if(llamaStateView)llamaStateView.textContent=labels[status.state]||status.state||'未知';
+        if(llamaContextView)llamaContextView.textContent=status.context?String(status.context)+' tokens':'—';
+        if(llamaRuntimeModelView)llamaRuntimeModelView.textContent=status.model?shortModel(status.model):'—';
+        if(llamaRuntimeErrorView)llamaRuntimeErrorView.textContent=status.error||'';
+      }catch(error){}
+    }
+    function openLlamaPanel(){
+      if(!llamaPanelView)return;
+      if(settingsView)settingsView.hidden=true;
+      llamaPanelView.hidden=false;
+      setActiveTab(true);
+      refreshModels();
+      refreshLlamaStatus();
+    }
+    function closeLlamaPanel(){
+      if(llamaPanelView)llamaPanelView.hidden=true;
+      setActiveTab(false);
+    }
     const openSettingsButton=document.getElementById('openSettings');
     const closeSettingsButton=document.getElementById('closeSettings');
     if(openSettingsButton)openSettingsButton.addEventListener('click',openSettings);
     if(closeSettingsButton)closeSettingsButton.addEventListener('click',closeSettings);
+    if(tabDashboardButton)tabDashboardButton.addEventListener('click',closeLlamaPanel);
+    if(tabLlamaButton)tabLlamaButton.addEventListener('click',()=>{
+      if(typeof window.chatBridge.openLlamaManager==='function')window.chatBridge.openLlamaManager();
+      else openLlamaPanel();
+    });
+    if(closeLlamaPanelButton)closeLlamaPanelButton.addEventListener('click',closeLlamaPanel);
     function renderModelSettings(state){
       if(!state||!modelSettingsView)return;
       modelState=state;
@@ -466,8 +551,15 @@
         if(state.selected&&!entries.some(entry=>entry[0]===state.selected))entries.push([state.selected,shortModel(state.selected)+'（不可用）']);
         selectedModelView.innerHTML=entries.map(entry=>'<option value="'+esc(entry[0])+'"'+(entry[0]===state.selected?' selected':'')+'>'+esc(entry[1])+'</option>').join('');
         selectedModelView.value=state.selected;
+        llamaModelSignature=signature;
+        if(llamaSelectedModelView&&!llamaModelDraft){
+          llamaSelectedModelView.innerHTML=entries.map(entry=>'<option value="'+esc(entry[0])+'"'+(entry[0]===state.selected?' selected':'')+'>'+esc(entry[1])+'</option>').join('');
+          llamaSelectedModelView.value=state.selected;
+        }
       }
       selectedModelView.disabled=state.locked;
+      if(llamaSelectedModelView)llamaSelectedModelView.disabled=state.locked;
+      if(llamaApplyModelButton)llamaApplyModelButton.disabled=state.locked||!llamaModelDraft;
       updateModelHint();
       applyModelsButton.disabled=state.locked||!modelDraft;
       if(state.locked)modelMessageView.textContent='本机正在推理或释放模型，结束后可切换。';
@@ -484,12 +576,50 @@
       updateModelHint();
     }
     if(selectedModelView)selectedModelView.addEventListener('change',modelEdited);
+    if(importModelButton)importModelButton.addEventListener('click',()=>{
+      if(typeof window.chatBridge.importModel!=='function'){
+        modelMessageView.textContent='当前应用不支持导入模型。';
+        return;
+      }
+      try{
+        modelMessageView.textContent=window.chatBridge.importModel();
+        setTimeout(refreshModels,700);
+        setTimeout(refreshModels,2500);
+      }catch(error){modelMessageView.textContent='模型导入未启动，请重试。';}
+    });
     if(applyModelsButton)applyModelsButton.addEventListener('click',()=>{
       try{
         const error=window.chatBridge.selectModel(selectedModelView.value);
         modelMessageView.textContent=error||'已保存，将用于后续请求。';
         if(!error){modelDraft=false;applyModelsButton.disabled=true;}
       }catch(error){modelMessageView.textContent='设置未保存，请重试。';}
+    });
+    if(llamaSelectedModelView)llamaSelectedModelView.addEventListener('change',()=>{
+      llamaModelDraft=true;
+      if(llamaModelMessageView)llamaModelMessageView.textContent='点击“应用并预加载”后生效。';
+      if(llamaApplyModelButton)llamaApplyModelButton.disabled=!modelState||modelState.locked;
+    });
+    if(llamaImportModelButton)llamaImportModelButton.addEventListener('click',()=>{
+      if(typeof window.chatBridge.importModel!=='function'){
+        if(llamaModelMessageView)llamaModelMessageView.textContent='当前应用不支持导入模型。';
+        return;
+      }
+      try{
+        if(llamaModelMessageView)llamaModelMessageView.textContent=window.chatBridge.importModel();
+        setTimeout(refreshModels,700);
+        setTimeout(refreshModels,2500);
+      }catch(error){
+        if(llamaModelMessageView)llamaModelMessageView.textContent='模型导入未启动，请重试。';
+      }
+    });
+    if(llamaApplyModelButton)llamaApplyModelButton.addEventListener('click',()=>{
+      try{
+        const error=window.chatBridge.selectModel(llamaSelectedModelView.value);
+        if(llamaModelMessageView)llamaModelMessageView.textContent=error||'已切换模型并开始后台预加载。';
+        if(!error){llamaModelDraft=false;llamaApplyModelButton.disabled=true;setTimeout(refreshLlamaStatus,500);}
+      }catch(error){
+        if(llamaModelMessageView)llamaModelMessageView.textContent='模型设置未保存，请重试。';
+      }
     });
     if(outputModeView)outputModeView.addEventListener('change',()=>{
       outputDraft=!!modelState&&outputModeView.value!==(modelState.streaming===false?'complete':'stream');
@@ -1296,6 +1426,13 @@
     });
     promptInput.addEventListener('keydown',(event)=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();document.getElementById('composer').requestSubmit();}});
     window.onNativeEvent=(event)=>{
+      if(event.kind==='llama-imported'||event.kind==='llama-import-error'){
+        if(modelMessageView)modelMessageView.textContent=event.text||'';
+        if(llamaModelMessageView)llamaModelMessageView.textContent=event.text||'';
+        refreshModels();
+        refreshLlamaStatus();
+        return;
+      }
       if(event.kind==='connection'){
         available=event.available===true;
         if(typeof event.pendingText==='string')pendingText='正在生成…';
@@ -1337,6 +1474,7 @@
     };
     if(typeof setInterval==='function')setInterval(()=>{
       if(Date.now()-modelPollAt>=2000){modelPollAt=Date.now();refreshModels();}
+      if(Date.now()-llamaStatusPollAt>=1000){llamaStatusPollAt=Date.now();refreshLlamaStatus();}
       let dirty=groups.some(groupRunning);
       for(const job of allCalls()){
         if(!job.running||!job.startedAt)continue;

@@ -2,6 +2,7 @@ import { hidebug } from '@kit.PerformanceAnalysisKit';
 import { batteryInfo, thermal } from '@kit.BasicServicesKit';
 import { DeviceInfoEntry, WireMessage } from '../protocol/ChatProtocol';
 import { activeModelDirs, deviceCapabilities, deviceTier } from '../llm/ModelRegistry';
+import { configuredLlamaModel, loadLlamaInferenceConfig } from '../llm/LlamaSettings';
 
 // Lightweight status requests run often; multi-frame rosters are gated
 // separately by topology changes and a 30-second refresh interval.
@@ -24,6 +25,11 @@ const loadCache: LoadCache = new LoadCache();
 
 /** Show every active model instead of mistaking the first deployed directory for the executing model. */
 export function deployedModelName(filesDir: string): string {
+  const llamaConfig = loadLlamaInferenceConfig(filesDir);
+  if (llamaConfig !== null && configuredLlamaModel(filesDir).length > 0) {
+    const name = llamaConfig.model.replace(/\.gguf$/i, '');
+    return name.length > 128 ? name.substring(0, 127) + '…' : name;
+  }
   const names = activeModelDirs(filesDir).join(' / ');
   // The wire model field is a display label capped at 128 characters.
   return names.length > 128 ? names.substring(0, 127) + '…' : names;
@@ -31,6 +37,15 @@ export function deployedModelName(filesDir: string): string {
 
 /** 设备级能力跟随当前模型选择；无启用模型 → []。 */
 export function deployedCapabilities(filesDir: string): string[] {
+  const config = loadLlamaInferenceConfig(filesDir);
+  if (config !== null && config.peerIp.length > 0 && !config.roleMaster) {
+    // A follower participates in llama.cpp reductions but does not accept its
+    // own infer.request. Do not advertise it as an independent text node.
+    return [];
+  }
+  if (config !== null && configuredLlamaModel(filesDir).length > 0) {
+    return ['text'];
+  }
   return deviceCapabilities(filesDir);
 }
 
@@ -123,7 +138,7 @@ export function buildSelfEntry(filesDir: string, running: number, deviceName: st
     ready: true
   };
   // 无就绪模型 → 0 → 省略字段（wire 缺省 = 老对端语义，消费侧按 2 处理）。
-  const tier = deviceTier(filesDir);
+  const tier = loadLlamaInferenceConfig(filesDir) !== null ? 2 : deviceTier(filesDir);
   if (tier >= 1) entry.modelTier = tier;
   return entry;
 }

@@ -1,12 +1,17 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import probe from 'libgewu_probe.so';
+import llamaProbe from 'libllama_probe.so';
 import { fileIo } from '@kit.CoreFileKit';
 import { SessionPlan, SessionReuse } from './SessionReuse';
-import { manifestTier, modelRequestType, selectModelDir } from './ModelRegistry';
+import {
+  isLlamaLayout, llamaContextTokens, llamaModelFile, manifestTier, modelRequestType, selectModelDir
+} from './ModelRegistry';
 import { classifyFromMessages, taskTextOf } from '../cluster/TaskRules';
 import { sanitizeModelOutput } from './Utf8Repair';
 import { InferenceMetrics } from '../protocol/ChatProtocol';
 import { outputSettings } from './OutputSettings';
+import { configuredLlamaModel, llamaRuntimeOptions, loadLlamaInferenceConfig } from './LlamaSettings';
+import { PeerPresenceService } from '../llama/PeerPresenceService';
 
 /**
  * 本地文本推理（GEWU probe）。档位感知选模：与 hub 侧同规则重算任务档位（消息
@@ -33,6 +38,16 @@ interface RequestMessage { role: string; content: string | MessagePart[] }
 interface ChatRequest { type: string; messages: RequestMessage[]; stream: boolean; max_tokens: number; }
 export interface ChatStartOptions { maxTokens?: number; waitSeconds?: number; image?: string; stream?: boolean; }
 const MAX_TOKENS = 2048;
+
+function localEthernetIp(): string {
+  try {
+    const ips = JSON.parse(llamaProbe.getnetworkips()) as Record<string, string>;
+    return typeof ips['eth'] === 'string' ? ips['eth'] : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 interface NativeEvent { event: string; id?: string; payload: string; elapsedMs?: number; }
 interface NativeUsage {
   model_load_latency?: number; prefill_latency?: number; decode_latency?: number;
@@ -58,6 +73,7 @@ const LOOP_MAX_UNIT = 48;
 const LOOP_MIN_REPEATS = 4;
 const DEGENERATE_FAILURE = '模型输出异常（重复或无意义字符），已自动停止。请重试或切换模型。';
 const ENGINE_ABORT_FAILURE = '模型推理被引擎中断，回答不完整，请重试。';
+const DISTRIBUTED_STALL_MS = 120000;
 
 /**
  * Broken weights or NaN logits make GEWU decode token 0 ("!") forever, and greedy decoding can
@@ -126,6 +142,7 @@ function endFailure(payload: string, hasAnswer: boolean, hasFinish: boolean): st
 interface Job {
   requestId: string;
   nativeId: number;
+  backend: 'gewu' | 'llama';
   cancelled: boolean;
   answer: string;
   /** Model text before <think> blocks are removed. */
@@ -134,6 +151,8 @@ interface Job {
   finishReason: string;
   delivered: boolean;
   nativeStartedAt: number;
+  lastProgressAt: number;
+  distributed: boolean;
   metrics: InferenceMetrics;
   /** 请求原文（taskTextOf 拼接）：sanitizeModelOutput 的修复锚点来源。 */
   promptSource: string;
@@ -166,13 +185,33 @@ export class LocalChat {
   hasPendingNativeJobs(): boolean { return this.jobs.length > 0; }
 
   /** Switching is allowed only after native cleanup, including cached GEWU sessions. */
-  resetIdleSessions(): void { this.reuse.closeAll(); }
+  resetIdleSessions(): void {
+    this.reuse.closeAll();
+    llamaProbe.release();
+  }
 
   // Basic readiness only: leave GEWU initialization to the actual request.
   // 所选文字引擎必须就绪；VL 权重不能作为文字引擎使用。
   readinessError(): string {
     if (this.closed) return '模型服务已关闭。';
-    return selectModelDir(this.filesDir, []).length > 0 ? '' : '没有可用的文字模型，请检查模型选择和部署文件。';
+    if (configuredLlamaModel(this.filesDir).length > 0) {
+      const config = loadLlamaInferenceConfig(this.filesDir);
+      if (config !== null && config.peerIp.length > 0 && !config.roleMaster) {
+        return '本机是双机级联 follower，请从 rank0 发起请求。';
+      }
+      return '';
+    }
+    const modelDir = selectModelDir(this.filesDir, []);
+    if (modelDir.length === 0) return '没有可用的文字模型，请检查模型选择和部署文件。';
+    const modelPath = this.filesDir + '/models/' + modelDir;
+    if (isLlamaLayout(modelPath)) {
+      return '';
+    }
+    return '';
+  }
+
+  llamaStatusJson(): string {
+    try { return llamaProbe.status(); } catch (_) { return '{"state":"error","error":"native status unavailable"}'; }
   }
 
   /**
@@ -212,29 +251,63 @@ export class LocalChat {
     const needs: string[] = image.length > 0 ? ['vision'] : [];
     // 档位感知选模：与 hub 侧同规则重算（消息逐字转发，两侧结果一致）。
     const profile = classifyFromMessages(messages, image.length > 0);
-    const modelDir = selectModelDir(this.filesDir, needs, profile.tier);
-    if (modelDir.length === 0) {
-      return image.length > 0 ? '本地模型不支持图片理解。' : '模型文件缺失或无法读取。';
-    }
-    const dirTier = manifestTier(this.filesDir, modelDir);
-    if (dirTier < profile.tier) {
-      hilog.info(0, 'NearbyChat', 'local tier fallback task=%{public}d dir=%{public}d model=%{public}s',
-        profile.tier, dirTier, modelDir);
+    const managerConfig = image.length === 0 ? loadLlamaInferenceConfig(this.filesDir) : null;
+    const managerModel = image.length === 0 ? configuredLlamaModel(this.filesDir) : '';
+    let modelDir = '';
+    let modelPath = '';
+    let backend: 'gewu' | 'llama';
+    let requestType = 'qwen2';
+    let contextSize = 8192;
+    if (managerConfig !== null && managerModel.length > 0) {
+      // The original Llama manager persists a request-time configuration. Do
+      // not load the model until this request actually reaches LocalChat.
+      backend = 'llama';
+      modelDir = managerConfig.model;
+      modelPath = managerModel;
+      contextSize = managerConfig.contextSize;
+    } else {
+      modelDir = selectModelDir(this.filesDir, needs, profile.tier);
+      if (modelDir.length === 0) {
+        return image.length > 0 ? '本地模型不支持图片理解。' : '模型文件缺失或无法读取。';
+      }
+      const dirTier = manifestTier(this.filesDir, modelDir);
+      if (dirTier < profile.tier) {
+        hilog.info(0, 'NearbyChat', 'local tier fallback task=%{public}d dir=%{public}d model=%{public}s',
+          profile.tier, dirTier, modelDir);
+      }
+      modelPath = this.filesDir + '/models/' + modelDir;
+      backend = isLlamaLayout(modelPath) ? 'llama' : 'gewu';
+      requestType = modelRequestType(this.filesDir, modelDir);
+      if (backend === 'llama') contextSize = llamaContextTokens(modelPath);
     }
     // A cached native session belongs to a specific model directory.
-    const plan: SessionPlan | undefined = this.reuseEnabled() && image.length === 0 ?
+    const plan: SessionPlan | undefined = backend === 'gewu' && this.reuseEnabled() && image.length === 0 ?
       this.reuse.plan(messages, modelDir) : undefined;
     const sent = plan !== undefined ? plan.messages : messages;
     const streaming = options.stream === undefined ? outputSettings(this.filesDir).streaming : options.stream;
-    const request = this.buildRequest(sent, image, modelRequestType(this.filesDir, modelDir), maxTokens, streaming);
+    const request = this.buildRequest(sent, image, requestType, maxTokens, streaming);
     let nativeId = 0;
     const nativeStartedAt = Date.now();
+    let distributed = false;
     try {
-      if (plan !== undefined && plan.key.length > 0) {
-        nativeId = probe.start(this.filesDir + '/models/' + modelDir, JSON.stringify(request),
+      if (backend === 'llama') {
+        const nativeModelPath = managerConfig !== null ? modelPath : llamaModelFile(modelPath);
+        const runtimeOptions = llamaRuntimeOptions(this.filesDir, managerConfig, contextSize, localEthernetIp());
+        distributed = runtimeOptions.distRanks > 1;
+        if (managerConfig !== null && runtimeOptions.distRanks > 1 && runtimeOptions.distRank === 0) {
+          PeerPresenceService.requestStart(managerConfig.peerIp, managerConfig.distMode).then(
+            (started: boolean): void => {
+              hilog.info(0, 'NearbyChat', 'distributed peer preload peer=%{public}s started=%{public}s',
+                managerConfig.peerIp, String(started));
+            }).catch((_error: Error): void => {});
+        }
+        nativeId = llamaProbe.start(nativeModelPath, JSON.stringify(request), waitSeconds,
+          contextSize, JSON.stringify(runtimeOptions));
+      } else if (plan !== undefined && plan.key.length > 0) {
+        nativeId = probe.start(modelPath, JSON.stringify(request),
           this.filesDir + '/gewu-chat.jsonl', waitSeconds, plan.key);
       } else {
-        nativeId = probe.start(this.filesDir + '/models/' + modelDir, JSON.stringify(request),
+        nativeId = probe.start(modelPath, JSON.stringify(request),
           this.filesDir + '/gewu-chat.jsonl', waitSeconds);
       }
     } catch (_) {
@@ -246,8 +319,9 @@ export class LocalChat {
       return '模型繁忙，请稍后再发。';
     }
     this.jobs.push({
-      requestId: requestId, nativeId: nativeId, cancelled: false, answer: '', raw: '', failure: '',
-      finishReason: '', delivered: false, nativeStartedAt: nativeStartedAt, metrics: { streaming: request.stream },
+      requestId: requestId, nativeId: nativeId, backend: backend, cancelled: false, answer: '', raw: '', failure: '',
+      finishReason: '', delivered: false, nativeStartedAt: nativeStartedAt, lastProgressAt: nativeStartedAt,
+      distributed: distributed, metrics: { streaming: request.stream },
       plan: plan, promptSource: taskTextOf(messages), callback: callback
     });
     if (this.timer === -1) this.timer = setInterval(() => this.consumeEvents(), 80);
@@ -259,12 +333,13 @@ export class LocalChat {
     if (requestId === undefined || requestId.length === 0) {
       for (const job of this.jobs) job.cancelled = true;
       probe.cancel();
+      llamaProbe.cancel();
       return;
     }
     const job = this.jobs.find((item: Job) => item.requestId === requestId && !item.delivered);
     if (job === undefined) return;
     job.cancelled = true;
-    probe.cancel(job.nativeId);
+    this.cancelNative(job);
   }
 
   close(): void {
@@ -272,16 +347,46 @@ export class LocalChat {
     for (const job of this.jobs) job.callback = undefined;
     this.cancel();
     this.reuse.closeAll();
+    llamaProbe.release();
     if (this.timer !== -1) clearInterval(this.timer);
     this.timer = -1;
   }
 
-  private jobByNative(nativeId: number): Job | undefined {
-    return this.jobs.find((item: Job) => item.nativeId === nativeId);
+  private jobByNative(nativeId: number, backend: 'gewu' | 'llama'): Job | undefined {
+    return this.jobs.find((item: Job) => item.nativeId === nativeId && item.backend === backend);
+  }
+
+  private cancelNative(job: Job): void {
+    if (job.backend === 'llama') llamaProbe.cancel(job.nativeId);
+    else probe.cancel(job.nativeId);
+  }
+
+  private completeNative(job: Job): void {
+    if (job.backend === 'llama') llamaProbe.complete(job.nativeId);
+    else probe.complete(job.nativeId);
   }
 
   private consumeEvents(): void {
-    for (const line of probe.takeEvents()) {
+    this.consumeEventLines('gewu', probe.takeEvents());
+    this.consumeEventLines('llama', llamaProbe.takeEvents());
+    this.reapStalledDistributed();
+  }
+
+  private reapStalledDistributed(): void {
+    const now = Date.now();
+    for (const job of this.jobs.slice()) {
+      if (!job.distributed || job.delivered || now - job.lastProgressAt <= DISTRIBUTED_STALL_MS) continue;
+      job.failure = '分布式推理超过 120 秒没有进度，已停止。请确认 rank1 已更新并重试。';
+      job.cancelled = true;
+      hilog.error(0, 'NearbyChat', 'distributed watchdog request=%{public}s silentMs=%{public}d',
+        job.requestId, now - job.lastProgressAt);
+      this.cancelNative(job);
+      this.finish(job);
+    }
+  }
+
+  private consumeEventLines(backend: 'gewu' | 'llama', lines: string[]): void {
+    for (const line of lines) {
       if (this.closed) continue;
       let event: NativeEvent;
       try { event = JSON.parse(line) as NativeEvent; }
@@ -289,9 +394,20 @@ export class LocalChat {
       if (!event || typeof event.event !== 'string') continue;
       const nativeId = event.id ? Number(event.id) : 0;
       if (nativeId <= 0) continue;
-      const job = this.jobByNative(nativeId);
+      const job = this.jobByNative(nativeId, backend);
       if (job === undefined) continue;
+      job.lastProgressAt = Date.now();
       if (event.event === 'file_error') job.failure = '模型文件缺失或无法读取。';
+      if (event.event === 'error') {
+        try {
+          const failure = JSON.parse(event.payload) as Record<string, string>;
+          job.failure = typeof failure.message === 'string' ? failure.message : '模型推理失败。';
+        } catch (_) {
+          job.failure = '模型推理失败。';
+        }
+        hilog.warn(0, 'NearbyChat', 'native error request=%{public}s message=%{public}s',
+          job.requestId, job.failure);
+      }
       if ((event.event === 'create' || event.event === 'submit' || event.event === 'destroy') &&
         event.payload !== '0') job.failure = '模型请求失败（' + event.event + ': ' + event.payload + '），请重试。';
       if (event.event === 'abort') job.cancelled = true;
@@ -330,7 +446,7 @@ export class LocalChat {
               hilog.warn(0, 'NearbyChat', 'degenerate output request=%{public}s chars=%{public}d',
                 job.requestId, job.answer.length);
               job.failure = DEGENERATE_FAILURE;
-              probe.cancel(job.nativeId);
+              this.cancelNative(job);
               continue;
             }
             if (job.callback) job.callback({ kind: 'delta', text: content, metrics: first ? job.metrics : undefined,
@@ -340,11 +456,11 @@ export class LocalChat {
         if (typeof response.finish_reason === 'string' && response.finish_reason.length > 0) {
           job.finishReason = response.finish_reason;
           if (job.finishReason === 'abort' && !job.cancelled) job.failure = ENGINE_ABORT_FAILURE;
-          probe.complete(job.nativeId);
+          this.completeNative(job);
         } else if (!job.metrics.streaming && job.answer.length > 0) {
           // stream:false has exactly one response; native already treats it as terminal.
           job.finishReason = 'stop';
-          probe.complete(job.nativeId);
+          this.completeNative(job);
         }
         // A terminal response returns before native teardown. Streaming chunks
         // without a finish marker must keep the session and callback alive.
@@ -362,7 +478,7 @@ export class LocalChat {
 
   private parseFailure(job: Job): void {
     job.failure = '模型回复解析失败，请重试。';
-    probe.cancel(job.nativeId);
+    this.cancelNative(job);
   }
 
   private finish(job: Job): void {
@@ -389,6 +505,10 @@ export class LocalChat {
       finishReason: job.failure ? 'error' : job.cancelled ? 'cancelled' : job.finishReason, metrics: job.metrics
     };
     if (job.failure) update.error = job.failure;
+    if (job.failure) {
+      hilog.warn(0, 'NearbyChat', 'inference failed request=%{public}s reason=%{public}s',
+        job.requestId, job.failure);
+    }
     const callback = job.callback;
     job.callback = undefined;
     job.delivered = true;

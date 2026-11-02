@@ -7,6 +7,7 @@ import { nearbyChannel } from '../nearby/LinkEnhanceChannel';
 import { nearbyBackgroundTask } from '../nearby/NearbyBackgroundTask';
 import { USE_LINK_ENHANCE } from '../nearby/NearbyConfig';
 import { CollaborationWindow, collaborationScreen } from '../ui/CollaborationScreen';
+import { PeerPresenceService } from '../llama/PeerPresenceService';
 
 class NativeCollaborationWindow implements CollaborationWindow {
   private target: window.Window;
@@ -24,6 +25,7 @@ class NativeCollaborationWindow implements CollaborationWindow {
 
 export default class EntryAbility extends UIAbility {
   onCreate(): void {
+    PeerPresenceService.start(this.context.filesDir);
     nearbyChannel.initialize(this.context);
     nearbyBackgroundTask.initialize(this.context);
     nearbyChannel.setActivityListener((connected: boolean): void => nearbyBackgroundTask.setWanted(connected));
@@ -68,6 +70,7 @@ export default class EntryAbility extends UIAbility {
     nearbyChannel.suspend();
   }
   onDestroy(): void {
+    PeerPresenceService.stop();
     collaborationScreen.clear();
     probe.cancel();
     nearbyChannel.destroy();
