@@ -446,24 +446,26 @@ function setup(isServer) {
     { epoch: 2, peerId: 'worker', name: '算力设备2', helloName: '算力设备2', ready: true, role: 'compute', slot: 2 }
   ];
   quiet.page.pollDeviceInfo();
-  assert.equal(quiet.sent.filter(message => message.type === 'deviceInfoSync').length, 1,
-    'only the compute worker, not the chat link, receives the multi-frame roster');
+  assert.equal(quiet.sent.filter(message => message.type === 'deviceInfoSync').length, 2,
+    'the compute worker and tablet chat both receive the route-view roster');
   quiet.page.pollDeviceInfo();
-  assert.equal(quiet.sent.filter(message => message.type === 'deviceInfoSync').length, 1,
-    'a two-second status poll does not resend an unchanged full roster');
+  assert.equal(quiet.sent.filter(message => message.type === 'deviceInfoSync').length, 2,
+    'a two-second status poll does not resend either unchanged full roster');
   quiet.channel.peerInfos = () => [
     { epoch: 1, peerId: 'chat', name: '聊天设备1', helloName: '聊天设备1', ready: true, role: 'chat', slot: 1 },
     { epoch: 3, peerId: 'chat-new', name: '聊天设备2', helloName: '聊天设备2', ready: true, role: 'chat', slot: 2 },
     { epoch: 2, peerId: 'worker', name: '算力设备2', helloName: '算力设备2', ready: true, role: 'compute', slot: 2 }
   ];
   quiet.page.pollDeviceInfo();
-  assert.equal(quiet.sent.filter(message => message.type === 'deviceInfoSync').length, 2,
-    'joining or leaving devices triggers immediate roster publication');
+  assert.equal(quiet.sent.filter(message => message.type === 'deviceInfoSync').length, 5,
+    'joining devices refresh the roster for every current compute and tablet peer');
   quiet.sent.length = 0;
   quiet.page.emitDashboard = () => {};
   quiet.page.jobs.push({ id: 'busy', workerEpoch: 0 });
   quiet.page.pollDeviceInfo();
-  assert.equal(quiet.sent.length, 1, 'busy polling publishes only a small load status');
+  assert.equal(quiet.sent.length, 3, 'busy polling publishes one small load status per compute or tablet peer');
+  assert(quiet.sent.every(message => message.type === 'deviceInfo' && message.memUsage === undefined),
+    'busy telemetry never re-sends the full roster');
   assert.equal(quiet.sent[0].modelRequests, 1);assert.equal(quiet.sent[0].type, 'deviceInfo');
   assert.equal(quiet.sent[0].memUsage, undefined);
 
@@ -1032,6 +1034,11 @@ function setup(isServer) {
   hub.page.publishFlow([call]);await flush();
   const first=hub.sent.find(message=>message.source==='flow-display');assert(first);
   assert(!/PRIVATE/.test(first.text),'flow notices omit model input, image and answer payloads');
+  hub.channel.peerInfos=()=>[{epoch:1,peerId:'w',deviceUid:'worker',name:'算力设备2',role:'compute',slot:2,ready:true},
+    {epoch:7,peerId:'chat',deviceUid:'phone',name:'聊天设备1',role:'chat',slot:1,ready:true}];
+  hub.page.publishFlow([call]);await flush();
+  assert.equal(hub.sent.filter(message=>message.source==='flow-display').length,2,'tablet chats receive the same private-payload-free flow state as compute peers');
+  assert(hub.sent.filter(message=>message.source==='flow-display').every(message=>!/PRIVATE/.test(message.text)));
   const count=hub.sent.length;hub.page.publishFlow([call]);await flush();assert.equal(hub.sent.length,count,'stream refreshes must not flood the wire with display frames');
   const worker=setup(true);worker.channel.selfComputeNumber=()=>2;worker.channel.selfLabel=()=>'算力设备2';
   worker.channel.peerInfos=()=>[{epoch:1,peerId:'hub',name:'算力设备1',helloName:'算力设备1',role:'compute',slot:1,ready:true}];

@@ -5,6 +5,8 @@ export interface TaskProgress {
   phase: TaskProgressPhase;
   startedAt: number;
   endedAt: number;
+  device?: string;
+  inferencePhase?: string;
 }
 
 export function taskProgressActive(phase: TaskProgressPhase): boolean {
