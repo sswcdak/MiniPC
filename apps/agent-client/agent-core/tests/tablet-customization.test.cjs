@@ -75,11 +75,13 @@ const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences}}
  for(const id of ['viewport','stage','space','collaboration','detail','detailText','closeDetail'])elements[id]=el();
  const document={getElementById:id=>elements[id]||null,createElement:()=>({})};
  const window={addEventListener(){}};vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],{document,window,Date,Map,Set,JSON,Math,Array,String,Number,setInterval(){}});
- window.onNativeEvent({devices:[{id:'hub',name:'算力设备1',role:'compute',ready:true,model:'Qwen2.5-7B-Instruct',memUsage:52},{id:'chat',name:'聊天设备1',role:'chat',ready:true}],jobs:[{id:'r',key:'client:r',source:'算力设备1',originId:'chat',origin:'聊天设备1',phase:'running',running:true,question:'测试<任务>',startedAt:Date.now()-5000}]});
+ window.onNativeEvent({devices:[{id:'hub',name:'算力设备1',role:'compute',ready:true,model:'Qwen2.5-7B-Instruct-Q4_N_0',memUsage:52},{id:'chat',name:'聊天设备1',role:'chat',ready:true}],jobs:[{id:'r',key:'client:r',source:'算力设备1',originId:'chat',origin:'聊天设备1',phase:'running',running:true,question:'测试<任务>',startedAt:Date.now()-5000}]});
  assert.match(elements.collaboration.innerHTML,/flow-compute/);assert.match(elements.collaboration.innerHTML,/测试&lt;任务&gt;/);assert.match(elements.collaboration.innerHTML,/路由中心/);assert.equal(elements.stage.style.transform,'scale(0.64)');
- assert.match(elements.collaboration.innerHTML,/算力设备1-Qwen2\.5-7B-Instruct/,'device title uses compute-reported model');
+ assert.match(elements.collaboration.innerHTML,/算力设备1-Qwen2\.5-7B/,'device title keeps the reported model family and size');
+ assert.doesNotMatch(elements.collaboration.innerHTML,/Qwen2\.5-7B-Instruct/,'device title omits model variant suffixes');
  window.onNativeEvent({devices:[{id:'hub',name:'算力设备1',role:'compute',ready:true,model:'Qwen2.5-VL-3B-NPU',capabilities:['text']}],jobs:[]});
- assert.match(elements.collaboration.innerHTML,/算力设备1-Qwen2\.5-VL-3B-NPU/,'a model switch changes the label without capability guessing');
+ assert.match(elements.collaboration.innerHTML,/算力设备1-Qwen2\.5-VL-3B/,'a model switch keeps its family and size');
+ assert.doesNotMatch(elements.collaboration.innerHTML,/Qwen2\.5-VL-3B-NPU/);
  assert.doesNotMatch(elements.collaboration.innerHTML,/算力设备1-(纯文本|多模态)/);
  window.onNativeEvent({devices:[{id:'hub',name:'算力设备1',role:'compute',ready:true,model:'<img src=x onerror="bad()">'}],jobs:[]});
  assert.match(elements.collaboration.innerHTML,/&lt;img src=x onerror=&quot;bad\(\)&quot;&gt;/,'model names are escaped in text and title attributes');

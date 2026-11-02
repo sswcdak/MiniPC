@@ -111,7 +111,8 @@ function allCalls(){return jobs.concat(remoteCalls);}
       return '纯文本';
     }
     function computeDisplayName(device){
-      const model=device&&typeof device.model==='string'?(device.model.trim()||'无可用模型'):'模型待同步';
+      const reported=device&&typeof device.model==='string'?(device.model.trim()||'无可用模型'):'模型待同步';
+      const model=reported.replace(/^(.+?-\d+(?:\.\d+)?B)-.+$/i,'$1');
       return publicJobName(device&&device.name,'compute')+'-'+model;
     }
     function jobKey(job){
