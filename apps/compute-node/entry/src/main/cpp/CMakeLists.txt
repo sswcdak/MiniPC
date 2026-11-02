@@ -105,7 +105,8 @@ endif()
 # Runtime libraries are built from the local llama.cpp tree used by the
 # llama-server-ohos application. The HAP carries the CPU backend only.
 set(LLAMA_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama/${OHOS_ARCH}")
-foreach(LLAMA_TARGET IN ITEMS llama_runtime ggml_runtime ggml_base_runtime ggml_cpu_runtime ggml_rpc_runtime llama_openmp)
+foreach(LLAMA_TARGET IN ITEMS llama_runtime ggml_runtime ggml_base_runtime ggml_cpu_runtime ggml_rpc_runtime
+    llama_common_runtime llama_server_runtime mtmd_runtime llama_cxx_runtime llama_openmp)
     add_library(${LLAMA_TARGET} SHARED IMPORTED)
 endforeach()
 set_target_properties(llama_runtime PROPERTIES
@@ -118,6 +119,14 @@ set_target_properties(ggml_cpu_runtime PROPERTIES
     IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libggml-cpu.so.0.22.0")
 set_target_properties(ggml_rpc_runtime PROPERTIES
     IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libggml-rpc.so.0.22.0")
+set_target_properties(llama_common_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libllama-common.so.0.3.0")
+set_target_properties(llama_server_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libllama-server-impl.so")
+set_target_properties(mtmd_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libmtmd.so.0.3.0")
+set_target_properties(llama_cxx_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libc++_shared.so")
 set_target_properties(llama_openmp PROPERTIES
     IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libomp.so")
 
@@ -134,6 +143,10 @@ target_link_libraries(llama_probe PUBLIC
     ggml_base_runtime
     ggml_cpu_runtime
     ggml_rpc_runtime
+    llama_common_runtime
+    llama_server_runtime
+    mtmd_runtime
+    llama_cxx_runtime
     llama_openmp)
 target_link_options(llama_probe PRIVATE "-Wl,--no-as-needed")
 target_compile_features(llama_probe PRIVATE cxx_std_17)

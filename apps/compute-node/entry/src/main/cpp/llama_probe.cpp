@@ -8,11 +8,15 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cerrno>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 #include <deque>
+#include <dirent.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <linux/neighbour.h>
 #include <linux/netlink.h>
@@ -21,8 +25,11 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <poll.h>
+#include <sstream>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -34,6 +41,11 @@
 
 // Process-wide MoE expert skip override from the bundled llama.cpp tree.
 void llama_set_bisect_params(int32_t k1, int32_t k2);
+// The same entry point used by llama-server-ohos. Keeping the model and context
+// lifecycle inside tools/server is what makes placement and memory accounting
+// match the application that already sustains the 14 GiB configuration.
+extern int llama_server(int argc, char ** argv);
+extern void llama_server_terminate();
 
 namespace {
 
@@ -110,12 +122,15 @@ std::string flushUtf8(std::string & pending) {
 std::atomic<uint64_t> g_statusExpertRamBytes{0};
 std::atomic<uint64_t> g_statusDiskBytes{0};
 std::atomic<int32_t> g_statusHitPct{-1};
+std::atomic<bool> g_serverFollowerReady{false};
+std::atomic<bool> g_serverThreadRunning{false};
+std::atomic<int32_t> g_serverExitCode{1};
+std::atomic<bool> g_logCaptureStarted{false};
 
-void llamaLogCallback(ggml_log_level level, const char * text, void *) {
-    if (text == nullptr) return;
-    const std::string line(text);
+void observeRuntimeLogLine(const std::string & line) {
     double value = 0.0;
-    if (sscanf(line.c_str(), "ggml_pool_mlock: slot arena locked in physical memory (%lf MiB)", &value) == 1) {
+    if (line.find("ggml_pool_mlock: slot arena locked in physical memory") != std::string::npos &&
+        sscanf(line.c_str(), "%*[^0-9]%lf", &value) == 1) {
         g_statusExpertRamBytes.store(static_cast<uint64_t>(std::max(0.0, value) * 1024.0 * 1024.0));
     } else if (line.find("POOL: fill loaded=") != std::string::npos) {
         const char * loaded = strstr(line.c_str(), "loaded=");
@@ -137,6 +152,15 @@ void llamaLogCallback(ggml_log_level level, const char * text, void *) {
             g_statusExpertRamBytes.store(static_cast<uint64_t>(std::max(0.0, value) * 1024.0 * 1024.0));
         }
     }
+    if (line.find("common_follower_run: rank ") != std::string::npos) {
+        g_serverFollowerReady.store(true);
+    }
+}
+
+void llamaLogCallback(ggml_log_level level, const char * text, void *) {
+    if (text == nullptr) return;
+    const std::string line(text);
+    observeRuntimeLogLine(line);
     if (level == GGML_LOG_LEVEL_ERROR) {
         OH_LOG_ERROR(LOG_APP, "%{public}s", text);
     } else if (level == GGML_LOG_LEVEL_WARN) {
@@ -347,13 +371,13 @@ size_t availableMemoryMiB() {
 
 /**
  * The OHOS llama.cpp build uses memory_budget for weight placement rather than
- * a kernel-enforced RSS limit. Keep 50% of currently available RAM outside the
- * model so mmap and context allocations cannot push a 24 GB device into reboot.
+ * a kernel-enforced RSS limit. Keep 30% of currently available RAM outside the
+ * model for mmap and context allocations.
  */
 size_t safeMemoryBudgetMiB(size_t requested, size_t & available) {
     available = availableMemoryMiB();
     if (available == 0) return requested;
-    const size_t usable = available / 2;
+    const size_t usable = available / 10 * 7;
     return requested == 0 || usable < requested ? usable : requested;
 }
 
@@ -425,6 +449,692 @@ std::string tokenPiece(const llama_vocab * vocab, llama_token token) {
     std::vector<char> larger(static_cast<size_t>(-count) + 16, '\0');
     count = llama_token_to_piece(vocab, token, larger.data(), static_cast<int32_t>(larger.size()), 0, true);
     return count > 0 ? std::string(larger.data(), static_cast<size_t>(count)) : std::string();
+}
+
+constexpr int kServerPort = 18080;
+
+struct HttpResponse {
+    int status = 0;
+    std::string body;
+};
+
+bool sendAll(int descriptor, const std::string & data) {
+    size_t sent = 0;
+    while (sent < data.size()) {
+        const ssize_t count = send(descriptor, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+        if (count > 0) {
+            sent += static_cast<size_t>(count);
+            continue;
+        }
+        if (count < 0 && errno == EINTR) continue;
+        return false;
+    }
+    return true;
+}
+
+int connectLocalServer() {
+    const int descriptor = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (descriptor < 0) return -1;
+    struct sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(kServerPort);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(descriptor, reinterpret_cast<struct sockaddr *>(&address), sizeof(address)) != 0) {
+        close(descriptor);
+        return -1;
+    }
+    return descriptor;
+}
+
+bool localPortListening(int port) {
+    const char * files[] = {"/proc/net/tcp", "/proc/net/tcp6"};
+    const unsigned int target = static_cast<unsigned int>(port);
+    for (const char * path : files) {
+        FILE * file = fopen(path, "r");
+        if (file == nullptr) continue;
+        char line[512];
+        bool found = false;
+        while (fgets(line, sizeof(line), file) != nullptr) {
+            unsigned int localPort = 0;
+            unsigned int state = 0;
+            const char * colon = strchr(line, ':');
+            if (colon != nullptr &&
+                sscanf(colon + 1, "%*64[0-9A-Fa-f]:%X %*64[0-9A-Fa-f]:%*X %X",
+                    &localPort, &state) == 2 &&
+                localPort == target && state == 0x0A) {
+                found = true;
+                break;
+            }
+        }
+        fclose(file);
+        if (found) return true;
+    }
+    return false;
+}
+
+std::string socketReadAll(int descriptor, int idleTimeoutMs) {
+    std::string output;
+    char buffer[16384];
+    for (;;) {
+        struct pollfd item = {descriptor, POLLIN, 0};
+        const int ready = poll(&item, 1, idleTimeoutMs);
+        if (ready <= 0) break;
+        const ssize_t count = recv(descriptor, buffer, sizeof(buffer), 0);
+        if (count <= 0) break;
+        output.append(buffer, static_cast<size_t>(count));
+    }
+    return output;
+}
+
+size_t headerEnd(const std::string & data, bool & crlf) {
+    const size_t first = data.find("\r\n\r\n");
+    if (first != std::string::npos) {
+        crlf = true;
+        return first + 4;
+    }
+    const size_t second = data.find("\n\n");
+    if (second != std::string::npos) {
+        crlf = false;
+        return second + 2;
+    }
+    return std::string::npos;
+}
+
+int responseStatus(const std::string & headers) {
+    int status = 0;
+    if (headers.compare(0, 5, "HTTP/") == 0) {
+        const size_t space = headers.find(' ');
+        if (space != std::string::npos) status = atoi(headers.c_str() + space + 1);
+    }
+    return status;
+}
+
+bool responseIsChunked(const std::string & headers) {
+    std::string lower = headers;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+        [](unsigned char value) { return static_cast<char>(tolower(value)); });
+    return lower.find("transfer-encoding: chunked") != std::string::npos;
+}
+
+class ChunkedDecoder {
+public:
+    void feed(const char * data, size_t size, std::string & output, bool & complete) {
+        buffer.append(data, size);
+        for (;;) {
+            if (!readingData) {
+                const size_t end = buffer.find('\n');
+                if (end == std::string::npos) return;
+                std::string line = buffer.substr(0, end);
+                buffer.erase(0, end + 1);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                const size_t extension = line.find(';');
+                if (extension != std::string::npos) line.resize(extension);
+                char * parsed = nullptr;
+                const unsigned long length = strtoul(line.c_str(), &parsed, 16);
+                if (parsed == line.c_str()) {
+                    complete = true;
+                    return;
+                }
+                if (length == 0) {
+                    complete = true;
+                    return;
+                }
+                remaining = static_cast<size_t>(length);
+                readingData = true;
+            }
+            if (buffer.size() < remaining + 2) return;
+            output.append(buffer.data(), remaining);
+            buffer.erase(0, remaining);
+            if (buffer.size() >= 2 && buffer.compare(0, 2, "\r\n") == 0) buffer.erase(0, 2);
+            else if (!buffer.empty() && buffer[0] == '\n') buffer.erase(0, 1);
+            readingData = false;
+        }
+    }
+
+private:
+    std::string buffer;
+    size_t remaining = 0;
+    bool readingData = false;
+};
+
+HttpResponse requestHealth() {
+    HttpResponse response;
+    const int descriptor = connectLocalServer();
+    if (descriptor < 0) return response;
+    const std::string request =
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    if (!sendAll(descriptor, request)) {
+        close(descriptor);
+        return response;
+    }
+    const std::string raw = socketReadAll(descriptor, 1500);
+    close(descriptor);
+    bool crlf = false;
+    const size_t split = headerEnd(raw, crlf);
+    if (split == std::string::npos) return response;
+    const std::string headers = raw.substr(0, split);
+    response.status = responseStatus(headers);
+    response.body = raw.substr(split);
+    return response;
+}
+
+void ensureLogCapture() {
+    bool expected = false;
+    if (!g_logCaptureStarted.compare_exchange_strong(expected, true)) return;
+    int descriptors[2] = {-1, -1};
+    if (pipe(descriptors) != 0) {
+        OH_LOG_WARN(LOG_APP, "server log capture pipe failed errno=%{public}d", errno);
+        return;
+    }
+    fcntl(descriptors[0], F_SETFD, FD_CLOEXEC);
+    fcntl(descriptors[1], F_SETFD, FD_CLOEXEC);
+    dup2(descriptors[1], STDOUT_FILENO);
+    dup2(descriptors[1], STDERR_FILENO);
+    close(descriptors[1]);
+    std::thread([descriptor = descriptors[0]]() {
+        std::string pending;
+        char buffer[4096];
+        for (;;) {
+            const ssize_t count = read(descriptor, buffer, sizeof(buffer));
+            if (count <= 0) break;
+            pending.append(buffer, static_cast<size_t>(count));
+            for (;;) {
+                const size_t newline = pending.find('\n');
+                if (newline == std::string::npos) break;
+                std::string line = pending.substr(0, newline);
+                pending.erase(0, newline + 1);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                observeRuntimeLogLine(line);
+                if (line.find("POOL:") != std::string::npos ||
+                    line.find("common_follower_run: rank ") != std::string::npos) {
+                    OH_LOG_INFO(LOG_APP, "%{public}s", line.c_str());
+                }
+            }
+        }
+        close(descriptor);
+    }).detach();
+}
+
+uint64_t modelDirectoryBytes(const std::string & modelPath) {
+    const size_t slash = modelPath.find_last_of('/');
+    if (slash == std::string::npos) return 0;
+    const std::string directory = modelPath.substr(0, slash);
+    uint64_t total = 0;
+    DIR * dir = opendir(directory.c_str());
+    if (dir != nullptr) {
+        while (struct dirent * entry = readdir(dir)) {
+            const std::string name(entry->d_name);
+            if (name.size() < 5 || name.compare(name.size() - 5, 5, ".gguf") != 0) continue;
+            struct stat info = {};
+            if (stat((directory + "/" + name).c_str(), &info) == 0 && S_ISREG(info.st_mode)) {
+                total += static_cast<uint64_t>(info.st_size);
+            }
+        }
+        closedir(dir);
+    }
+    if (total > 0) return total;
+    struct stat info = {};
+    return stat(modelPath.c_str(), &info) == 0 ? static_cast<uint64_t>(info.st_size) : 0;
+}
+
+std::string modelAlias(const std::string & path) {
+    std::string name = path;
+    const size_t slash = name.find_last_of('/');
+    if (slash != std::string::npos) name.erase(0, slash + 1);
+    const size_t shard = name.find("-00001-of-");
+    if (shard != std::string::npos) name.resize(shard);
+    if (name.size() >= 5 && name.compare(name.size() - 5, 5, ".gguf") == 0) {
+        name.resize(name.size() - 5);
+    }
+    return name;
+}
+
+std::vector<std::string> serverArguments(const std::string & modelPath, int32_t contextSize,
+    const RuntimeOptions & options) {
+    const int32_t nBatch = std::clamp(options.nBatch, 1, contextSize);
+    const int32_t nUbatch = std::clamp(options.nUbatch, 1, nBatch);
+    std::vector<std::string> args = {
+        "llama-server",
+        "-m", modelPath,
+        "--host", "127.0.0.1",
+        "-c", std::to_string(contextSize),
+        "--port", std::to_string(kServerPort),
+        "-np", std::to_string(std::max<int32_t>(1, options.nSeqMax)),
+        "-b", std::to_string(nBatch),
+        "-ub", std::to_string(nUbatch),
+        "-rea", "off"
+    };
+    const std::string alias = modelAlias(modelPath);
+    if (!alias.empty()) {
+        args.push_back("--alias");
+        args.push_back(alias);
+    }
+    if (options.ffnHotCold) args.push_back("--ffn-hot-cold");
+    if (options.memoryBudgetMb > 0) {
+        args.push_back("--memory-budget");
+        args.push_back(std::to_string(options.memoryBudgetMb));
+    }
+    if (options.kvReservePct > 0.0f) {
+        args.push_back("--kv-reserve-pct");
+        args.push_back(std::to_string(options.kvReservePct));
+    }
+    if (options.ffnHotCold) {
+        args.push_back("--hot-alpha");
+        args.push_back(std::to_string(options.hotAlpha));
+    }
+    if (options.moeSkipK1 > 0) {
+        args.push_back("--moe-skip-k1");
+        args.push_back(std::to_string(options.moeSkipK1));
+    }
+    if (options.moeSkipK2 > 0) {
+        args.push_back("--moe-skip-k2");
+        args.push_back(std::to_string(options.moeSkipK2));
+    }
+    args.push_back(options.prefetch ? "--prefetch" : "--no-prefetch");
+    if (options.distFollower) args.push_back("--follower");
+    return args;
+}
+
+class ServerEngine {
+public:
+    ~ServerEngine() { release(); }
+
+    bool prepare(const std::string & modelPath, int32_t contextSize, const RuntimeOptions & options,
+        const std::string & runtimeKey, long long & loadMs) {
+        if (serverThread.joinable() && g_modelReady.load() && modelPath == loadedPath &&
+            contextSize == loadedContext && runtimeKey == loadedRuntimeKey) {
+            loadMs = 0;
+            return true;
+        }
+        release();
+
+        configureDistributed(options);
+        g_modelLoading.store(true);
+        g_modelReady.store(false);
+        g_serverFollowerReady.store(false);
+        g_serverExitCode.store(1);
+        g_statusExpertRamBytes.store(0);
+        g_statusDiskBytes.store(0);
+        g_statusHitPct.store(-1);
+        g_statusDistRank.store(options.distRanks > 1 ? options.distRank : -1);
+        g_statusDistRanks.store(options.distRanks);
+        g_statusDistFollower.store(options.distFollower);
+        llama_set_bisect_params(options.moeSkipK1, options.moeSkipK2);
+        setenv("LLAMA_HC_KV_DIR", options.kvDir.empty() ? "/data/storage/el2/base/haps/entry/files"
+            : options.kvDir.c_str(), 1);
+        setenv("LLAMA_POOL_DEBUG", "1", 1);
+        ensureLogCapture();
+        g_statusDiskBytes.store(modelDirectoryBytes(modelPath));
+
+        std::vector<std::string> args = serverArguments(modelPath, contextSize, options);
+        OH_LOG_INFO(LOG_APP,
+            "server startup model=%{public}s context=%{public}d budgetMiB=%{public}zu "
+            "hotCold=%{public}d prefetch=%{public}d rank=%{public}d/%{public}d follower=%{public}d",
+            modelPath.c_str(), contextSize, options.memoryBudgetMb, options.ffnHotCold ? 1 : 0,
+            options.prefetch ? 1 : 0, options.distRank, options.distRanks,
+            options.distFollower ? 1 : 0);
+        const auto started = Clock::now();
+        g_serverThreadRunning.store(true);
+        serverThread = std::thread([args = std::move(args)]() mutable {
+            std::vector<char *> argv;
+            argv.reserve(args.size());
+            for (std::string & arg : args) argv.push_back(arg.data());
+            int result = 1;
+            try {
+                result = llama_server(static_cast<int>(argv.size()), argv.data());
+            } catch (const std::exception & error) {
+                OH_LOG_ERROR(LOG_APP, "llama_server exception: %{public}s", error.what());
+            } catch (...) {
+                OH_LOG_ERROR(LOG_APP, "llama_server unknown exception");
+            }
+            g_serverExitCode.store(result);
+            g_serverThreadRunning.store(false);
+            g_modelReady.store(false);
+            OH_LOG_INFO(LOG_APP, "llama_server exited ret=%{public}d", result);
+        });
+
+        const auto deadline = started + std::chrono::minutes(10);
+        while (Clock::now() < deadline) {
+            if (options.distFollower &&
+                (g_serverFollowerReady.load() || localPortListening(30001))) {
+                g_serverFollowerReady.store(true);
+                g_modelReady.store(true);
+                break;
+            }
+            if (!options.distFollower) {
+                const HttpResponse health = requestHealth();
+                if (health.status == 200 && health.body.find("\"status\":\"ok\"") != std::string::npos) {
+                    g_modelReady.store(true);
+                    break;
+                }
+            }
+            if (!g_serverThreadRunning.load()) {
+                const int32_t result = g_serverExitCode.load();
+                setStatus(result == 0 ? "llama-server stopped during startup" : "llama-server startup failed");
+                g_modelLoading.store(false);
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(350));
+        }
+        if (!g_modelReady.load()) {
+            setStatus("llama-server startup timed out");
+            g_modelLoading.store(false);
+            return false;
+        }
+
+        loadedPath = modelPath;
+        loadedContext = contextSize;
+        loadedRuntimeKey = runtimeKey;
+        loadedFollower = options.distFollower;
+        g_statusContext.store(contextSize);
+        g_modelLoading.store(false);
+        setStatus("", modelPath);
+        loadMs = elapsedMs(started);
+        OH_LOG_INFO(LOG_APP, "llama-server ready loadMs=%{public}lld", loadMs);
+        return true;
+    }
+
+    void release() {
+        if (serverThread.joinable()) {
+            if (g_serverThreadRunning.load() && !loadedFollower) {
+                llama_server_terminate();
+            }
+            serverThread.join();
+        }
+        loadedPath.clear();
+        loadedRuntimeKey.clear();
+        loadedContext = 0;
+        loadedFollower = false;
+        g_serverFollowerReady.store(false);
+        g_serverThreadRunning.store(false);
+        g_statusContext.store(0);
+        g_statusDistRank.store(-1);
+        g_statusDistRanks.store(1);
+        g_statusDistFollower.store(false);
+        g_statusExpertRamBytes.store(0);
+        g_statusDiskBytes.store(0);
+        g_statusHitPct.store(-1);
+        g_modelReady.store(false);
+        g_modelLoading.store(false);
+    }
+
+private:
+    std::thread serverThread;
+    std::string loadedPath;
+    std::string loadedRuntimeKey;
+    int32_t loadedContext = 0;
+    bool loadedFollower = false;
+};
+
+json usageFor(const json & object, long long loadMs, long long elapsed) {
+    json usage = {
+        {"model_load_latency", loadMs},
+        {"prefill_latency", elapsed},
+        {"decode_latency", 0},
+        {"prompt_tokens", 0},
+        {"completion_tokens", 0}
+    };
+    if (object.contains("timings") && object["timings"].is_object()) {
+        const json & timings = object["timings"];
+        if (timings.contains("prompt_ms") && timings["prompt_ms"].is_number()) {
+            usage["prefill_latency"] = timings["prompt_ms"].get<double>();
+        }
+        if (timings.contains("predicted_ms") && timings["predicted_ms"].is_number()) {
+            usage["decode_latency"] = timings["predicted_ms"].get<double>();
+        }
+    }
+    if (object.contains("usage") && object["usage"].is_object()) {
+        const json & reported = object["usage"];
+        if (reported.contains("prompt_tokens") && reported["prompt_tokens"].is_number_integer()) {
+            usage["prompt_tokens"] = reported["prompt_tokens"].get<int64_t>();
+        }
+        if (reported.contains("completion_tokens") && reported["completion_tokens"].is_number_integer()) {
+            usage["completion_tokens"] = reported["completion_tokens"].get<int64_t>();
+        }
+    }
+    return usage;
+}
+
+void executeServer(ServerEngine & engine, const Job & job) {
+    const auto started = Clock::now();
+    const auto deadline = job.waitSeconds > 0 ?
+        started + std::chrono::seconds(job.waitSeconds) : Clock::time_point::max();
+
+    InferenceRequest request;
+    std::string parseError;
+    if (!parseRequest(job.requestJson, request, parseError)) {
+        pushEvent(job.id, "create", "invalid-request");
+        pushError(job.id, parseError, elapsedMs(started));
+        pushEvent(job.id, "end", "error", elapsedMs(started));
+        return;
+    }
+
+    long long loadMs = 0;
+    if (!engine.prepare(job.modelPath, job.contextSize, job.runtimeOptions,
+        job.runtimeOptionsJson, loadMs)) {
+        std::string message;
+        {
+            std::lock_guard<std::mutex> lock(g_statusMutex);
+            message = g_statusError;
+        }
+        pushEvent(job.id, "file_error", "1");
+        pushError(job.id, message.empty() ? "llama-server model load failed" : message,
+            elapsedMs(started));
+        pushEvent(job.id, "end", "load_failed", elapsedMs(started));
+        return;
+    }
+    if (g_cancelCurrent.load()) {
+        engine.release();
+        pushEvent(job.id, "end", "cancelled", elapsedMs(started));
+        return;
+    }
+
+    json payload;
+    try {
+        payload = json::parse(job.requestJson);
+        payload["stream"] = true;
+        payload["cache_prompt"] = false;
+    } catch (const std::exception & error) {
+        pushError(job.id, std::string("request JSON error: ") + error.what(), elapsedMs(started));
+        pushEvent(job.id, "end", "error", elapsedMs(started));
+        return;
+    }
+    const std::string body = dumpJson(payload);
+    const std::string requestText =
+        "POST /v1/chat/completions HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Content-Type: application/json\r\n"
+        "Accept: text/event-stream\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    const int descriptor = connectLocalServer();
+    if (descriptor < 0 || !sendAll(descriptor, requestText)) {
+        if (descriptor >= 0) close(descriptor);
+        pushError(job.id, "llama-server local HTTP connection failed", elapsedMs(started));
+        pushEvent(job.id, "end", "connection_failed", elapsedMs(started));
+        return;
+    }
+    pushEvent(job.id, "create", "0", elapsedMs(started));
+    pushEvent(job.id, "submit", "0", elapsedMs(started));
+
+    std::string raw;
+    std::string headers;
+    bool haveHeaders = false;
+    bool chunked = false;
+    bool complete = false;
+    bool finishSeen = false;
+    bool protocolError = false;
+    int status = 0;
+    std::string answer;
+    std::string finishReason;
+    std::string errorMessage;
+    std::string sseRemainder;
+    json reportedUsage = {
+        {"model_load_latency", loadMs},
+        {"prefill_latency", 0},
+        {"decode_latency", 0},
+        {"prompt_tokens", 0},
+        {"completion_tokens", 0}
+    };
+    ChunkedDecoder decoder;
+
+    auto consumeSse = [&](const std::string & decoded) {
+        sseRemainder += decoded;
+        for (;;) {
+            const size_t newline = sseRemainder.find('\n');
+            if (newline == std::string::npos) break;
+            std::string line = sseRemainder.substr(0, newline);
+            sseRemainder.erase(0, newline + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.compare(0, 5, "data:") != 0) continue;
+            std::string data = line.substr(5);
+            if (!data.empty() && data.front() == ' ') data.erase(0, 1);
+            if (data == "[DONE]") {
+                complete = true;
+                continue;
+            }
+            try {
+                const json event = json::parse(data);
+                if (event.contains("error")) {
+                    protocolError = true;
+                    const json & error = event["error"];
+                    errorMessage = error.is_object() && error.contains("message") &&
+                        error["message"].is_string() ? error["message"].get<std::string>() :
+                        dumpJson(error);
+                }
+                if (event.contains("choices") && event["choices"].is_array() &&
+                    !event["choices"].empty()) {
+                    const json & choice = event["choices"][0];
+                    if (choice.contains("delta") && choice["delta"].is_object()) {
+                        const json & delta = choice["delta"];
+                        if (delta.contains("content") && delta["content"].is_string()) {
+                            const std::string content = delta["content"].get<std::string>();
+                            if (!content.empty()) {
+                                answer += content;
+                                if (request.stream) {
+                                    json response = {
+                                        {"message", {{"role", "assistant"}, {"content", content}}},
+                                        {"finish_reason", nullptr},
+                                        {"usage", usageFor(event, loadMs, elapsedMs(started))}
+                                    };
+                                    pushEvent(job.id, "response", dumpJson(response), elapsedMs(started));
+                                }
+                            }
+                        }
+                    }
+                    if (choice.contains("finish_reason") && choice["finish_reason"].is_string()) {
+                        finishReason = choice["finish_reason"].get<std::string>();
+                        finishSeen = true;
+                    }
+                }
+                if (event.contains("usage") || event.contains("timings")) {
+                    reportedUsage = usageFor(event, loadMs, elapsedMs(started));
+                }
+            } catch (const std::exception & error) {
+                protocolError = true;
+                errorMessage = std::string("invalid server SSE JSON: ") + error.what();
+            }
+        }
+    };
+
+    char buffer[16384];
+    while (!complete && !protocolError) {
+        if (g_cancelCurrent.load()) {
+            finishReason = "cancelled";
+            break;
+        }
+        if (deadline != Clock::time_point::max() && Clock::now() >= deadline) {
+            finishReason = "timeout";
+            break;
+        }
+        struct pollfd item = {descriptor, POLLIN, 0};
+        const int ready = poll(&item, 1, 300);
+        if (ready == 0) continue;
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            protocolError = true;
+            errorMessage = "llama-server response poll failed";
+            break;
+        }
+        const ssize_t count = recv(descriptor, buffer, sizeof(buffer), 0);
+        if (count == 0) break;
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            protocolError = true;
+            errorMessage = "llama-server response read failed";
+            break;
+        }
+        if (!haveHeaders) {
+            raw.append(buffer, static_cast<size_t>(count));
+            bool crlf = false;
+            const size_t split = headerEnd(raw, crlf);
+            if (split == std::string::npos) continue;
+            headers = raw.substr(0, split);
+            status = responseStatus(headers);
+            chunked = responseIsChunked(headers);
+            const std::string initial = raw.substr(split);
+            raw.clear();
+            haveHeaders = true;
+            if (status < 200 || status >= 300) {
+                if (chunked) {
+                    std::string decoded;
+                    bool chunkDone = false;
+                    decoder.feed(initial.data(), initial.size(), decoded, chunkDone);
+                    errorMessage += decoded;
+                } else {
+                    errorMessage += initial;
+                }
+                protocolError = true;
+                break;
+            }
+            if (chunked) {
+                std::string decoded;
+                bool chunkDone = false;
+                decoder.feed(initial.data(), initial.size(), decoded, chunkDone);
+                if (!decoded.empty()) consumeSse(decoded);
+                if (chunkDone) complete = true;
+            } else if (!initial.empty()) {
+                consumeSse(initial);
+            }
+            continue;
+        }
+        if (chunked) {
+            std::string decoded;
+            bool chunkDone = false;
+            decoder.feed(buffer, static_cast<size_t>(count), decoded, chunkDone);
+            if (!decoded.empty()) consumeSse(decoded);
+            if (chunkDone) complete = true;
+        } else {
+            consumeSse(std::string(buffer, static_cast<size_t>(count)));
+        }
+    }
+    close(descriptor);
+    if (g_cancelCurrent.load()) finishReason = "cancelled";
+    if (finishReason.empty() && !protocolError) finishReason = answer.empty() ? "empty" : "stop";
+    if (protocolError) {
+        json error = json::parse(errorMessage.empty() ? "{\"message\":\"llama-server request failed\"}" :
+            errorMessage, nullptr, false);
+        std::string message = errorMessage;
+        if (error.is_object() && error.contains("error") && error["error"].is_object() &&
+            error["error"].contains("message") && error["error"]["message"].is_string()) {
+            message = error["error"]["message"].get<std::string>();
+        }
+        pushError(job.id, message.empty() ? "llama-server request failed" : message, elapsedMs(started));
+        pushEvent(job.id, "end", "error", elapsedMs(started));
+    } else {
+        if (reportedUsage["decode_latency"].get<double>() == 0.0 &&
+            reportedUsage["completion_tokens"].get<int64_t>() > 0) {
+            reportedUsage["decode_latency"] = elapsedMs(started);
+        }
+        json response = {
+            {"message", {{"role", "assistant"}, {"content", request.stream ? "" : answer}}},
+            {"finish_reason", finishReason},
+            {"usage", reportedUsage}
+        };
+        pushEvent(job.id, "response", dumpJson(response), elapsedMs(started));
+        pushEvent(job.id, "end", finishReason, elapsedMs(started));
+    }
+    if (finishReason == "cancelled" || finishReason == "timeout") engine.release();
 }
 
 class Engine {
@@ -760,10 +1470,8 @@ void followerLoop(Engine & engine) {
 }
 
 void workerMain() {
-    llama_backend_init();
     llama_log_set(llamaLogCallback, nullptr);
-    ggml_backend_load_all();
-    Engine engine;
+    ServerEngine engine;
     for (;;) {
         Job job;
         {
@@ -784,11 +1492,6 @@ void workerMain() {
             if (!engine.prepare(job.modelPath, job.contextSize, job.runtimeOptions,
                 job.runtimeOptionsJson, loadMs)) {
                 setStatus("GGUF model load failed");
-            } else if (job.runtimeOptions.distFollower) {
-                g_modelLoading.store(false);
-                g_runningJobId.store(0);
-                followerLoop(engine);
-                continue;
             }
             g_modelLoading.store(false);
             g_runningJobId.store(0);
@@ -800,7 +1503,7 @@ void workerMain() {
             g_modelLoading.store(true);
         }
         try {
-            execute(engine, job);
+            executeServer(engine, job);
         } catch (const std::exception & e) {
             pushError(job.id, std::string("Native 推理异常: ") + e.what(), 0);
             pushEvent(job.id, "end", "exception", 0);
