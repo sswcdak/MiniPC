@@ -13,6 +13,12 @@ const snapshot=store=>JSON.parse(store.snapshot([],'聊天设备1','chat',true,7
  assert.equal(snapshot(store).devices.find(d=>d.id==='hub').memUsage,62,'an empty poll is not a telemetry update');
  store.receive({type:'deviceInfoSync',devices:[{id:'hub',role:'self',ready:true,slot:1,capabilities:[]},{id:'worker',name:'Hardware Name',role:'compute',ready:true,slot:2,model:'text',memUsage:45}]},7,hub);
  assert.equal(snapshot(store).devices.find(d=>d.id==='worker').name,'算力设备2');
+ store.receive({type:'deviceInfoSync',devices:[{id:'hub',role:'self',slot:1},{id:'worker',role:'compute',slot:2,model:'Qwen3.5-9B'}]},7,hub);
+ assert.equal(snapshot(store).devices.find(d=>d.id==='worker').model,'Qwen3.5-9B','compact compute roster updates the reported model');
+ store.receive({type:'deviceInfoSync',devices:[{id:'hub',role:'self',slot:1},{id:'worker',role:'compute',slot:2}]},7,hub);
+ assert.equal(snapshot(store).devices.find(d=>d.id==='worker').model,'Qwen3.5-9B','missing model telemetry preserves the last reported model');
+ store.receive({type:'deviceInfoSync',devices:[{id:'hub',role:'self',slot:1},{id:'worker',role:'compute',slot:2,model:''}]},7,hub);
+ assert.equal(snapshot(store).devices.find(d=>d.id==='worker').model,'','explicit empty model clears a previous selection');
  device=snapshot(store).devices.find(d=>d.id==='hub');assert.equal(device.memUsage,62);assert.equal(device.model,'Qwen-VL');assert.deepEqual(device.capabilities,['text','vision']);
  store.receive({type:'deviceInfo',modelRequests:0},7,hub);device=snapshot(store).devices.find(d=>d.id==='hub');assert.equal(device.jobs,0);assert.equal(device.memUsage,62);
  store.receive({type:'deviceInfo',memUsage:70},7,hub);assert.equal(snapshot(store).devices.find(d=>d.id==='hub').memUsage,70);

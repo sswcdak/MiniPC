@@ -1555,15 +1555,16 @@ struct Index {
       cluster.push(entry);
     }
     const signature = cluster.map((entry: DeviceInfoEntry) =>
-      entry.id + ':' + (entry.role || '') + ':' + String(entry.slot || 0)).sort().join('|');
+      entry.id + ':' + (entry.role || '') + ':' + String(entry.slot || 0) + ':' +
+        JSON.stringify(entry.model ?? null)).sort().join('|');
     const now = Date.now();
     const busy = this.jobs.length > 0;
     const isHub = this.channel.selfComputeNumber() === 1;
-    // Topology is control traffic: membership changes must reach joining nodes
-    // during inference too. Strip telemetry/name duplication to keep it small.
+    // Membership and model changes must reach tablets during inference too.
+    // Retain the reported model label while omitting frequent telemetry.
     const compact = cluster.map((entry: DeviceInfoEntry): DeviceInfoEntry => ({
       id: entry.deviceUid || entry.id, role: entry.role, slot: entry.slot, ready: entry.ready,
-      capabilities: entry.capabilities || []
+      capabilities: entry.capabilities || [], model: entry.model
     }));
     // Publish only self and direct peers. Re-forwarding another compute's roster
     // created a cycle in which a disconnected chat survived forever as a ghost.

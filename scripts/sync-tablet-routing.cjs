@@ -15,11 +15,15 @@ const hasCloudAdapter = previous.includes('.flow-cloud{');
 const cloudCss = hasCloudAdapter ? (previous.match(/^    \.flow-cloud\{.*$/m)?.[0] || '') : '';
 const css = part('    .flow-view{', '</style>') + '\n' + cloudCss;
 const symbols = [...source.matchAll(/<symbol id="flow-[\s\S]*?<\/symbol>/g)].map(m=>m[0]).join('\n');
-const helpers = part('    function summaryText(', '    function focusWithoutScroll(')+
+let helpers = part('    function summaryText(', '    function focusWithoutScroll(')+
  part('    function morphNode(', '    function phaseView(')+
- part('    function esc(', '    function sideClass(')+
+ part('    function esc(', source.includes('    function sideClass(') ? '    function sideClass(' : '    function shortModel(')+
  part('    function publicJobName(', '    function updateButton(')+
  part('    function jobKey(', '    // The rail is rebuilt');
+// Device model names come from compute telemetry, not capability-derived labels.
+helpers=helpers.replace("return publicJobName(device&&device.name,'compute')+'-'+computeKindLabel(device);",
+ `const model=device&&typeof device.model==='string'?(device.model.trim()||'无可用模型'):'模型待同步';
+      return publicJobName(device&&device.name,'compute')+'-'+model;`);
 let renderer = part('    const flowView=', '    function setTaskView(');
 if (hasCloudAdapter) {
  const start=previous.indexOf('    const flowView='), end=previous.indexOf('\nconst viewport=',start);
@@ -31,6 +35,10 @@ renderer=renderer.replace(/height=Math.max\((?:210|224|240|256),88\+Math.max\(1,
  'height=Math.max(device.ready?256:304,96+Math.max(1,active.length)*108)');
 renderer=renderer.replace('class="flow-compute" data-row-key="compute:',
  `class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:`);
+renderer=renderer.replace(/height=Math.max\(device.ready\?(?:256|304|344):(?:304|344|384),96\+Math.max\(1,active.length\)\*108\)/,
+ 'height=Math.max(device.ready?344:384,96+Math.max(1,active.length)*108)');
+renderer=renderer.replace("<span>'+esc(computeDisplayName(d))+'</span>",
+ "<span title=\"'+esc(computeDisplayName(d))+'\">'+esc(computeDisplayName(d))+'</span>");
 renderer=renderer.replace('left=380,rowWidth=', 'left=320,rowWidth=');
 if (!renderer.includes('const spread=width/960;')) {
  renderer=renderer.replace('const width=Math.max(960,(flowView.clientWidth||1024)-44),left=320,rowWidth=width-left-18;',
@@ -94,6 +102,7 @@ ${css}
 .flow-compute:not(.flow-cloud){border:2px solid #D4DEEA;background:#FFFFFF;box-shadow:0 3px 10px #2449710A,0 1px 2px #24497108}
 .flow-phone{font-size:28px}.flow-phone>span{white-space:nowrap}.flow-router>span{font-size:28px}
 .flow-computer{font-size:30px;gap:8px}.flow-computer small{font-size:24px}
+.flow-computer{min-width:0}.flow-computer>span{width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:36px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .flow-memory{width:200px}.flow-memory>i{height:18px;border-radius:9px}
 .flow-memory>span{font-size:26px;line-height:32px}.flow-memory b{font-weight:700}
 .flow-lane h3{font-size:30px;line-height:36px}.flow-idle{font-size:25px}

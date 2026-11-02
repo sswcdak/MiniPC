@@ -972,6 +972,37 @@ function setup(isServer) {
   console.log('PASS: a non-hub worker answers heavy questions locally instead of refusing on tier');
 }
 
+// Model updates reach tablets even while the hub is busy and membership is unchanged.
+(async () => {
+  const s = setup(true), sent = [];
+  s.page.serviceReady = true;
+  s.page.emitDashboard = () => {};
+  s.channel.selfComputeNumber = () => 1;
+  s.channel.peerInfos = () => [
+    { epoch: 2, peerId: 'worker', deviceUid: 'worker', ready: true, role: 'compute', slot: 2 },
+    { epoch: 7, peerId: 'tablet', deviceUid: 'tablet', ready: true, role: 'chat', slot: 1 }
+  ];
+  s.channel.send = (message, epoch) => { sent.push({ message, epoch }); return Promise.resolve(true); };
+  s.page.peerStats.set(2, { model: 'Qwen2.5-7B-Instruct', memUsage: 45 });
+  s.page.jobs.push({ id: 'busy', workerEpoch: 0 });
+  s.page.pollDeviceInfo(); await flush();
+  const toTablet = () => sent.filter(item => item.epoch === 7 && item.message.type === 'deviceInfoSync');
+  assert.equal(toTablet().at(-1).message.devices.find(d => d.id === 'worker').model, 'Qwen2.5-7B-Instruct');
+  assert.equal(toTablet().at(-1).message.devices.find(d => d.id === 'worker').memUsage, undefined,
+    'busy roster retains the model without adding sampled telemetry');
+  sent.length = 0; s.page.pollDeviceInfo(); await flush();
+  assert.equal(toTablet().length, 0, 'unchanged model names do not flood the roster');
+  s.page.peerStats.set(2, { model: 'Qwen3.5-9B' });
+  s.page.pollDeviceInfo(); await flush();
+  assert.equal(toTablet().length, 1, 'a model change refreshes the tablet without a topology change');
+  assert.equal(toTablet()[0].message.devices.find(d => d.id === 'worker').model, 'Qwen3.5-9B');
+  sent.length = 0; s.page.peerStats.set(2, { model: '' });
+  s.page.pollDeviceInfo(); await flush();
+  assert.equal(toTablet()[0].message.devices.find(d => d.id === 'worker').model, '',
+    'an explicit empty model is sent so tablets can clear a stale name');
+  console.log('PASS: busy tablet model propagation, switching, empty model and unchanged-roster suppression');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
 // 算力端↔算力端 roster 同步后的空 deviceInfo 轮询帧必须带 capabilities 字段：
 {
   const h=setup(true),job=h.page.createJob('timing',[{role:'user',content:'timing'}],false,0);
