@@ -24,6 +24,19 @@ HarmonyOS NEXT 算力应用，使用 GEWU/KNPU 运行本地模型，并作为近
 - llm/LocalChat 与 cpp/gewu_probe.cpp：Native 模型请求和清理。
 - cluster/DevicePool：能力、档位和负载选点；nearby/LinkEnhanceChannel：组网、编号和接管。
 
+## 前端的算力集群标识
+
+`deviceInfo` 和 `deviceInfoSync.devices[]` 的可选 `inferenceBackend` 字段声明设备配置的推理引擎：
+
+- `llama.cpp`：Llama 管理配置优先；未配置管理模型时，使用所选 GGUF 模型的后端。
+- `gewu`：所选普通文本模型的后端。
+- `qwenvl`：只有视觉模型可用时的后端。
+- 空字符串：当前没有可用引擎；字段缺省兼容旧端，并保留已知状态。
+
+平板与算力面板按该字段把 llama.cpp 设备的可见名称改为“算力集群”，并显示三台服务器组成的图标。
+模型简称保持不变，例如“算力集群2-Qwen3-80B”。路由使用的设备 ID、编号和任务归属不随显示名称变化。
+繁忙时的精简名册同样携带该字段，后端切换会触发名册同步；切回 GEWU 或清除模型后恢复普通设备样式。
+
 ## GGUF / llama.cpp 同进程推理
 
 `entry/src/main/cpp/llama_probe.cpp` 直接把 llama.cpp CPU 运行时编入本应用。

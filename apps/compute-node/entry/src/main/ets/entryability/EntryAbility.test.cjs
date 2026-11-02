@@ -11,6 +11,7 @@ const moduleObject={exports:{}};const context={exports:moduleObject.exports,requ
  if(name==='../nearby/LinkEnhanceChannel')return{nearbyChannel:{resume(){lifecycle.push('resume');},suspend(){lifecycle.push('background');},destroy(){lifecycle.push('destroy');},setActivityListener(){}}};
  if(name==='../nearby/NearbyBackgroundTask')return{nearbyBackgroundTask:{retry(){lifecycle.push('retry');},dispose(){lifecycle.push('release');}}};
  if(name==='../ui/CollaborationScreen')return screenModule.exports;
+ if(name==='../llama/PeerPresenceService')return{PeerPresenceService:{start(){lifecycle.push('presence-start');},stop(){lifecycle.push('presence-stop');}}};
  return{};
 }};
 vm.runInNewContext(transpile(path.join(__dirname,'EntryAbility.ets')),context);
@@ -20,5 +21,6 @@ vm.runInNewContext(transpile(path.join(__dirname,'EntryAbility.ets')),context);
  assert(!lifecycle.includes('cancel'));assert(!lifecycle.includes('destroy'));
  ability.onDestroy();await screen.settled();assert.equal(records.at(-1),false);
  assert(lifecycle.includes('cancel'));assert(lifecycle.includes('destroy'));assert(lifecycle.includes('release'));
+ assert(lifecycle.includes('presence-stop'),'destruction releases the llama presence service');
  console.log('PASS actual EntryAbility binds successful code-zero callback and releases window on background/destroy');
 })().catch(e=>{console.error(e);process.exitCode=1;});

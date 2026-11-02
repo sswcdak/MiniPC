@@ -260,6 +260,7 @@
 <body>
 <svg style="position:absolute;width:0;height:0;overflow:hidden" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
 <symbol id="flow-phone" viewBox="0 0 58 87"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="46" height="81" rx="8" fill="#fff"/><rect x="10" y="8" width="38" height="65" rx="3" stroke="#d3d8e1" fill="#fbfcff"/><path d="M24 5h10M24 78h10" stroke-linecap="round"/></g></symbol>
+<symbol id="flow-cluster" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="8" width="30" height="48" rx="4"/><rect x="40" y="8" width="30" height="48" rx="4"/><rect x="76" y="8" width="30" height="48" rx="4"/><path d="M19 56v12h72V56M55 56v19" fill="none"/></g><g fill="none" stroke="#bdc5cf" stroke-width="1.3"><path d="M10 21h18M10 33h18M10 45h18M46 21h18M46 33h18M46 45h18M82 21h18M82 33h18M82 45h18"/></g><g fill="#279a73"><circle cx="13" cy="15" r="1.6"/><circle cx="49" cy="15" r="1.6"/><circle cx="85" cy="15" r="1.6"/></g><circle cx="55" cy="75" r="3" fill="white" stroke="currentColor" stroke-width="1.8"/></symbol>
 <symbol id="flow-pc" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="16" y="4" width="78" height="52" rx="4"/><rect x="21" y="9" width="68" height="41" rx="1.5" stroke="#cbd1da" stroke-width="1.2" fill="#fcfdfd"/><path d="M16 57h78l12 17q1 4-4 4H8q-5 0-4-4z"/><path d="M4 73h102M26 61h58l5 7H22z" stroke="#bdc5cf" stroke-width="1.1"/><path d="M46 71h18l3 5H43z" stroke="#b2bac5" stroke-width="1"/><path d="M34 61l-2 7m15-7-1 7m15-7 1 7m13-7 2 7" stroke="#d1d6de" stroke-width="1"/></g></symbol>
 <symbol id="flow-task-text" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></symbol>
 <symbol id="flow-task-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="16" cy="9" r="1.5"/><path d="m3 17 5-6 5 6 3-3 5 5"/></symbol>
@@ -898,8 +899,15 @@
       if(device&&device.model&&String(device.model).toLowerCase().indexOf('vl')>=0)return '多模态';
       return '纯文本';
     }
+    function isLlamaCluster(device){
+      return !!device&&device.inferenceBackend==='llama.cpp';
+    }
+    function computePublicName(device){
+      const name=publicJobName(device&&device.name,'compute');
+      return isLlamaCluster(device)?(name==='本机'?'算力集群':name.replace(/^算力设备/,'算力集群')):name;
+    }
     function computeDisplayName(device){
-      return publicJobName(device&&device.name,'compute')+'-'+computeKindLabel(device);
+      return computePublicName(device)+'-'+computeKindLabel(device);
     }
     function updateButton(){
       const local=localRunning();
@@ -1011,11 +1019,11 @@
           sources.map(source=>'<path class="flow-wire '+(activeSource.has(source.id)?'active':'')+'" d="'+sourcePath(sourceY.get(source.id))+'" marker-end="url(#flow-arrow)"/>').join('')+
           rows.map(row=>'<path class="flow-wire '+(activeTarget.has(row.device.id)?'active':'')+'" d="'+targetPath(targetY.get(row.device.id))+'" marker-end="url(#flow-arrow)"/>').join('')+'</svg>';
         const phones=sources.map(source=>'<div class="flow-phone" data-row-key="source:'+esc(source.id)+'" style="top:'+(sourceY.get(source.id)-58)+'px"><svg aria-hidden="true"><use href="#flow-phone"/></svg><span>'+esc(source.id==='local-source'?'本机 / 未知来源':publicJobName(source.name,'chat'))+'</span></div>').join('');
-        const router='<div class="flow-router '+(flights.length?'active':'')+'" style="top:'+(center-35)+'px"><svg aria-hidden="true" viewBox="0 0 48 36"><rect x="2" y="13" width="10" height="10" rx="2"/><rect x="35" y="2" width="10" height="10" rx="2"/><rect x="35" y="24" width="10" height="10" rx="2"/><path d="M12 18h9q4 0 4-4v-3q0-4 4-4h6M21 18q4 0 4 4v3q0 4 4 4h6"/></svg><span>路由中心<br>(算力设备1)</span></div>';
+        const router='<div class="flow-router '+(flights.length?'active':'')+'" style="top:'+(center-35)+'px"><svg aria-hidden="true" viewBox="0 0 48 36"><rect x="2" y="13" width="10" height="10" rx="2"/><rect x="35" y="2" width="10" height="10" rx="2"/><rect x="35" y="24" width="10" height="10" rx="2"/><path d="M12 18h9q4 0 4-4v-3q0-4 4-4h6M21 18q4 0 4 4v3q0 4 4 4h6"/></svg><span>路由中心<br>('+esc(computePublicName(computers.find(device=>device.name==='算力设备1')||{name:'算力设备1'}))+')</span></div>';
         const boxes=rows.map(row=>{
           const d=row.device,mem=typeof d.memUsage==='number'&&Number.isFinite(d.memUsage)&&d.memUsage>=0?Math.min(100,d.memUsage):null;
           const memory='<div class="flow-memory" aria-label="内存 '+(mem===null?'未采集':mem+'%')+'"><i><em style="width:'+(mem===null?0:mem)+'%;background:'+(mem>50?'#e1b43b':'#279a73')+'"></em></i><span>内存<b>'+(mem===null?'—':Math.round(mem)+'%')+'</b></span></div>';
-          return '<section class="flow-compute" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#flow-pc"/></svg>'+(d.role==='self'?'<span class="flow-pc-local">本机</span>':'')+'</div><span>'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'推理中':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
+          return '<section class="flow-compute" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#'+(isLlamaCluster(d)?'flow-cluster':'flow-pc')+'"/></svg>'+(d.role==='self'&&!isLlamaCluster(d)?'<span class="flow-pc-local">本机</span>':'')+'</div><span>'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'推理中':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
         }).join('');
         const packets=flights.filter(item=>targetY.has(item.executor)).map(item=>{
           const y=sourceY.get(item.origin||'local-source')||center;
@@ -1095,6 +1103,7 @@
       applyDevicesCollapsed();
     })();
     function renderDevices(){
+      if(titleView)titleView.textContent=computePublicName({...devices.find(device=>device.role==='self'),name:selfLabel});
       if(!devicesView)return;
       const count=document.getElementById('deviceCount');
       if(count)count.textContent=devices.length?' · '+devices.length+' 台':'';
@@ -1107,8 +1116,8 @@
       if(!devices.length){devicesView.innerHTML='<div class="empty">等待聊天手机连入</div>';return;}
       renderMarkup(devicesView,devices.map(device=>{
         const compute=device.role==='self'||device.role==='compute';
-        let title=device.name||'';
-        if(title.indexOf('算力设备')!==0&&title.indexOf('聊天设备')!==0){
+        let title=compute?computePublicName(device):(device.name||'');
+        if(title.indexOf('算力设备')!==0&&title.indexOf('算力集群')!==0&&title.indexOf('聊天设备')!==0){
           title=device.role==='self'?(selfLabel||'算力设备'):(compute?'算力设备':'聊天设备');
         }
         const mark=device.role==='self'?'self':(compute?'':'chat');

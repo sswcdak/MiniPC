@@ -1,7 +1,7 @@
 import { hidebug } from '@kit.PerformanceAnalysisKit';
 import { batteryInfo, thermal } from '@kit.BasicServicesKit';
 import { DeviceInfoEntry, WireMessage } from '../protocol/ChatProtocol';
-import { activeModelDirs, deviceCapabilities, deviceTier } from '../llm/ModelRegistry';
+import { activeModelDirs, deviceCapabilities, deviceTier, isLlamaLayout, selectModelDir } from '../llm/ModelRegistry';
 import { configuredLlamaModel, loadLlamaInferenceConfig } from '../llm/LlamaSettings';
 
 // Lightweight status requests run often; multi-frame rosters are gated
@@ -22,6 +22,14 @@ class LoadCache {
 }
 
 const loadCache: LoadCache = new LoadCache();
+
+/** Report the configured text engine; a vision-only device uses its VL engine. */
+export function deployedInferenceBackend(filesDir: string): string {
+  if (configuredLlamaModel(filesDir).length > 0) return 'llama.cpp';
+  const text = selectModelDir(filesDir, []);
+  if (text.length > 0) return isLlamaLayout(filesDir + '/models/' + text) ? 'llama.cpp' : 'gewu';
+  return selectModelDir(filesDir, ['vision']).length > 0 ? 'qwenvl' : '';
+}
 
 /** Show every active model instead of mistaking the first deployed directory for the executing model. */
 export function deployedModelName(filesDir: string): string {
@@ -132,7 +140,7 @@ export function buildSelfEntry(filesDir: string, running: number, deviceName: st
     thermalLevel: mem.thermalLevel,
     batteryTemp: mem.batteryTemp,
     cpuUsage: mem.cpuUsage,
-    model: model,
+    model: model, inferenceBackend: deployedInferenceBackend(filesDir),
     modelRequests: running,
     capabilities: deployedCapabilities(filesDir),
     ready: true
@@ -154,7 +162,7 @@ export function toDeviceInfoReply(requestId: string, entry: DeviceInfoEntry): Wi
     thermalLevel: entry.thermalLevel === undefined ? -1 : entry.thermalLevel,
     batteryTemp: entry.batteryTemp === undefined ? -1 : entry.batteryTemp,
     cpuUsage: entry.cpuUsage === undefined ? -1 : entry.cpuUsage,
-    model: entry.model || '',
+    model: entry.model || '', inferenceBackend: entry.inferenceBackend,
     modelRequests: entry.modelRequests === undefined ? -1 : entry.modelRequests,
     capabilities: entry.capabilities || [],
     peerRole: 'compute'
@@ -172,6 +180,7 @@ export function applyDeviceInfo(target: DeviceInfoEntry, message: WireMessage): 
   if (typeof message.batteryTemp === 'number') target.batteryTemp = message.batteryTemp;
   if (typeof message.cpuUsage === 'number') target.cpuUsage = message.cpuUsage;
   if (typeof message.model === 'string') target.model = message.model;
+  if (message.inferenceBackend !== undefined) target.inferenceBackend = message.inferenceBackend;
   if (typeof message.modelRequests === 'number') target.modelRequests = message.modelRequests;
   if (Array.isArray(message.capabilities)) target.capabilities = message.capabilities;
   // 新旧混布容忍：旧构建可能上报 3 档，消费侧一律归一成 2（强档）。

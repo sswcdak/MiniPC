@@ -2,7 +2,7 @@ import { DeviceInfoEntry, RoutingCall, WireMessage } from '../protocol/ChatProto
 
 interface RouteDevice {
   id: string; name: string; role: string; ready: boolean; jobs: number;
-  model?: string; memUsage?: number; capabilities?: string[]; pendingInfo?: boolean;
+  model?: string; inferenceBackend?: string; memUsage?: number; capabilities?: string[]; pendingInfo?: boolean;
 }
 interface FlowNotice {
   key: string; revision: number; kind: string; phase: string; source: string; origin: string;
@@ -22,6 +22,7 @@ function mergeDevice(previous: DeviceInfoEntry | undefined, next: DeviceInfoEntr
     id: next.id ?? previous?.id, deviceUid: next.deviceUid ?? previous?.deviceUid,
     name: next.name || previous?.name, role: next.role ?? previous?.role, slot: next.slot ?? previous?.slot,
     ready: next.ready ?? previous?.ready, model: next.model ?? previous?.model,
+    inferenceBackend: next.inferenceBackend ?? previous?.inferenceBackend,
     memTotal: next.memTotal ?? previous?.memTotal, memAvail: next.memAvail ?? previous?.memAvail,
     memUsage: next.memUsage ?? previous?.memUsage, thermalLevel: next.thermalLevel ?? previous?.thermalLevel,
     batteryTemp: next.batteryTemp ?? previous?.batteryTemp, cpuUsage: next.cpuUsage ?? previous?.cpuUsage,
@@ -56,7 +57,7 @@ export class TaskRoutingStore {
       return;
     }
     // Empty deviceInfo frames are polls, not new telemetry. Do not clear known values.
-    if (connectedHub === null || (message.model === undefined && message.memUsage === undefined &&
+    if (connectedHub === null || (message.model === undefined && message.inferenceBackend === undefined && message.memUsage === undefined &&
       message.memTotal === undefined && message.memAvail === undefined && message.cpuUsage === undefined &&
       message.thermalLevel === undefined && message.batteryTemp === undefined && message.modelRequests === undefined &&
       (message.capabilities === undefined || message.capabilities.length === 0))) { return; }
@@ -66,7 +67,7 @@ export class TaskRoutingStore {
     const update: DeviceInfoEntry = {
       id: hubId, deviceUid: connectedHub.deviceUid, name: prior?.name || connectedHub.name || message.name,
       role: 'compute', ready: true, slot: prior?.slot ?? connectedHub.slot,
-      model: message.model, memUsage: message.memUsage, memTotal: message.memTotal, memAvail: message.memAvail,
+      model: message.model, inferenceBackend: message.inferenceBackend, memUsage: message.memUsage, memTotal: message.memTotal, memAvail: message.memAvail,
       cpuUsage: message.cpuUsage, thermalLevel: message.thermalLevel, batteryTemp: message.batteryTemp,
       modelRequests: message.modelRequests, capabilities: message.capabilities
     };
@@ -101,7 +102,7 @@ export class TaskRoutingStore {
       id: device.deviceUid || device.id || 'roster-' + index, name: device.slot !== undefined && device.slot > 0 ?
         (device.role === 'chat' ? '聊天设备' : '算力设备') + device.slot : (device.name || (device.role === 'chat' ? '聊天设备' : '算力设备')),
       role: device.role === 'chat' ? 'chat' : 'compute', ready: device.ready !== false,
-      jobs: device.modelRequests ?? 0, model: device.model, memUsage: device.memUsage,
+      jobs: device.modelRequests ?? 0, model: device.model, inferenceBackend: device.inferenceBackend, memUsage: device.memUsage,
       capabilities: device.capabilities
     }));
     // A completed handshake is enough to show the connected hub. Older compute builds

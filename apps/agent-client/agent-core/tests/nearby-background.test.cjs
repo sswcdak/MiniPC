@@ -78,7 +78,8 @@ for (const app of apps) {
       '../nearby/LinkEnhanceChannel':{nearbyChannel:channel},
       '../nearby/NearbyBackgroundTask':{nearbyBackgroundTask:h.lease},
       '../ui/CollaborationScreen':{collaborationScreen:{setForeground(){},clear(){}}},
-      'libgewu_probe.so':{default:{cancel(){calls.push('cancel');}}}
+      'libgewu_probe.so':{default:{cancel(){calls.push('cancel');}}},
+      '../llama/PeerPresenceService':{PeerPresenceService:{start(){},stop(){}}}
     };
     const filename=path.join(root,app,'entry/src/main/ets/entryability/EntryAbility.ets');
     const js=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;

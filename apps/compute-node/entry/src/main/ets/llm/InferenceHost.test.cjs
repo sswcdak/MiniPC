@@ -19,7 +19,7 @@ const routerModule = load('../cluster/ComputeRouter.ets');
 const reuse = load('SessionReuse.ets');
 const taskRules = load('../cluster/TaskRules.ets');
 const repair = load('Utf8Repair.ets');
-const registry = {readyModelDirs:()=>['Qwen2.5-7B-Instruct-Q4_N_0'],
+const registry = {isLlamaLayout: () => false,readyModelDirs:()=>['Qwen2.5-7B-Instruct-Q4_N_0'],
  selectModelDir:()=> 'Qwen2.5-7B-Instruct-Q4_N_0', modelRequestType:()=> 'qwen2', manifestTier:()=>2};
 const {InferenceRelay, RelayEvents} = load('InferenceRelay.ets', {...logger,
   '../cluster/ComputeRouter': routerModule, '../cluster/DevicePool': pool, '../cluster/TaskRules': taskRules, './SessionReuse': reuse});
@@ -37,6 +37,8 @@ function fixture(options = {}) {
     return options.failAt === id ? 0 : id;
   }, cancel(id) {cancels.push(id);}, complete() {}, takeEvents() {return events.splice(0);}, closeSession() {}};
   const {LocalChat} = load('LocalChat.ets', {
+    './LlamaSettings': {configuredLlamaModel: () => '', loadLlamaInferenceConfig: () => null},
+    'libllama_probe.so': {default: {takeEvents: () => [], cancel() {}, complete() {}, release() {}}},
     './OutputSettings': {outputSettings:()=>({streaming:options.streaming!==false})},
     ...logger, './ModelRegistry': registry, '../cluster/TaskRules': taskRules, './Utf8Repair': repair, './SessionReuse': reuse, 'libgewu_probe.so': {default: native},
     '@kit.CoreFileKit': {fileIo: {OpenMode: {READ_ONLY: 0}, accessSync: () => false,

@@ -43,6 +43,9 @@ const context = { exports: {}, ArrayBuffer, Date: {now:()=>clockOverride ?? Date
     },
     cancel(id) { cancelledIds.push(id); }, complete() {}, takeEvents() { return nativeEvents.splice(0); }
   } };
+  if (name === 'libllama_probe.so') return {default: {takeEvents: () => [], release() {}, cancel() {}, complete() {}}};
+  if (name === './LlamaSettings') return {configuredLlamaModel: () => '', loadLlamaInferenceConfig: () => null};
+  if (name === '../llama/PeerPresenceService') return {PeerPresenceService: {getInstance: () => ({})}};
   if (name === './SessionReuse') return reuseExports;
   if (name === './OutputSettings') return {outputSettings:()=>({streaming:outputPreference})};
   if (name === '@kit.CoreFileKit') return { fileIo: {accessSync:()=>reuseOn} };
@@ -56,6 +59,7 @@ const context = { exports: {}, ArrayBuffer, Date: {now:()=>clockOverride ?? Date
       return registryDirs[0] || '';
     },
     modelRequestType: () => requestType,
+    isLlamaLayout: () => false,
     manifestTier: () => 2
   };
   if (name === '../cluster/TaskRules') return taskRules;

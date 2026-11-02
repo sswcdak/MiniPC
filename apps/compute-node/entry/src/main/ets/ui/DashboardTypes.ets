@@ -58,6 +58,7 @@ export interface DeviceView {
   jobs: number;
   role?: string;
   model?: string;
+  inferenceBackend?: string;
   memUsage?: number;
   thermalLevel?: number;
   batteryTemp?: number;

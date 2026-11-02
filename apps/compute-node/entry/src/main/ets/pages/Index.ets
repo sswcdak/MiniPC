@@ -28,7 +28,7 @@ import {
 } from '../llm/UsageLedger';
 import { pickJpegDataUrl, jpegBase64Payload } from '../media/ImageAttach';
 import {
-  DEVICE_INFO_POLL_MS, applyDeviceInfo, buildSelfEntry, deployedModelName,
+  DEVICE_INFO_POLL_MS, applyDeviceInfo, buildSelfEntry, deployedModelName, deployedInferenceBackend,
   toDeviceInfoReply
 } from '../cluster/DeviceInfo';
 import { chatLabel, computeLabel, hidePhoneName, needsLabel, publicLabel, workerTail } from '../cluster/DeviceLabels';
@@ -635,7 +635,7 @@ struct Index {
       // Work this device is actually running: its own questions plus requests a
       // chat peer routed here. `peer` alone would count "推理 0" mid-inference.
       jobs: this.jobs.filter((item: ActiveJob) => item.workerEpoch === 0).length,
-      role: 'self', model: self.model, memUsage: self.memUsage,
+      role: 'self', model: self.model, inferenceBackend: self.inferenceBackend, memUsage: self.memUsage,
       thermalLevel: self.thermalLevel, batteryTemp: self.batteryTemp, cpuUsage: self.cpuUsage,
       modelRequests: self.modelRequests, capabilities: self.capabilities, modelTier: self.modelTier
     });
@@ -659,7 +659,7 @@ struct Index {
       }
       devices.push({
         epoch: peer.epoch, name: hidePhoneName(peer.name, peer.role || 'chat'), id: id, ready: peer.ready, jobs: count,
-        role: peer.role, model: stats?.model, memUsage: stats?.memUsage,
+        role: peer.role, model: stats?.model, inferenceBackend: stats?.inferenceBackend, memUsage: stats?.memUsage,
         thermalLevel: stats?.thermalLevel, batteryTemp: stats?.batteryTemp, cpuUsage: stats?.cpuUsage,
         modelRequests: stats?.modelRequests, capabilities: stats?.capabilities, modelTier: stats?.modelTier
       });
@@ -688,7 +688,7 @@ struct Index {
       devices.push({
         epoch: -1, name: name, id: id || name, ready: extra.ready !== false,
         jobs: role === 'compute' ? Math.max(0, extra.modelRequests ?? 0) : 0,
-        role: role, model: extra.model, memUsage: extra.memUsage,
+        role: role, model: extra.model, inferenceBackend: extra.inferenceBackend, memUsage: extra.memUsage,
         thermalLevel: extra.thermalLevel, batteryTemp: extra.batteryTemp, cpuUsage: extra.cpuUsage,
         modelRequests: extra.modelRequests, capabilities: extra.capabilities, modelTier: extra.modelTier
       });
@@ -1508,7 +1508,8 @@ struct Index {
   private handleDeviceInfo(message: WireMessage, epoch: number): void {
     if (message.memUsage !== undefined || message.model !== undefined ||
       message.thermalLevel !== undefined || message.batteryTemp !== undefined ||
-      message.cpuUsage !== undefined || message.modelRequests !== undefined || message.modelTier !== undefined) {
+      message.cpuUsage !== undefined || message.modelRequests !== undefined || message.modelTier !== undefined ||
+      message.inferenceBackend !== undefined) {
       let entry = this.peerStats.get(epoch);
       if (entry === undefined) {
         entry = { role: this.channel.peerRole(epoch) || 'compute', capabilities: [] };
@@ -1588,7 +1589,7 @@ struct Index {
 
   private inferenceLoadStatus(running: number): WireMessage {
     return { type: 'deviceInfo', requestId: 'load-' + String(Date.now()),
-      model: deployedModelName(this.filesDir), modelRequests: running, peerRole: 'compute' };
+      model: deployedModelName(this.filesDir), inferenceBackend: deployedInferenceBackend(this.filesDir), modelRequests: running, peerRole: 'compute' };
   }
 
   private startMeshRetry(): void {
@@ -1634,7 +1635,7 @@ struct Index {
       const entry: DeviceInfoEntry = {
         id: identity, deviceUid: peer.deviceUid || undefined,
         name: peer.helloName || '', role: peer.role || 'chat', ready: peer.ready,
-        model: stats?.model, memUsage: stats?.memUsage, memAvail: stats?.memAvail,
+        model: stats?.model, inferenceBackend: stats?.inferenceBackend, memUsage: stats?.memUsage, memAvail: stats?.memAvail,
         memTotal: stats?.memTotal, thermalLevel: stats?.thermalLevel,
         batteryTemp: stats?.batteryTemp, cpuUsage: stats?.cpuUsage,
         modelRequests: stats?.modelRequests,
@@ -1647,7 +1648,7 @@ struct Index {
     }
     const signature = cluster.map((entry: DeviceInfoEntry) =>
       entry.id + ':' + (entry.role || '') + ':' + String(entry.slot || 0) + ':' +
-        JSON.stringify(entry.model ?? null)).sort().join('|');
+        JSON.stringify(entry.model ?? null) + ':' + JSON.stringify(entry.inferenceBackend ?? null)).sort().join('|');
     const now = Date.now();
     const busy = this.jobs.length > 0;
     const isHub = this.channel.selfComputeNumber() === 1;
@@ -1655,7 +1656,7 @@ struct Index {
     // Retain the reported model label while omitting frequent telemetry.
     const compact = cluster.map((entry: DeviceInfoEntry): DeviceInfoEntry => ({
       id: entry.deviceUid || entry.id, role: entry.role, slot: entry.slot, ready: entry.ready,
-      capabilities: entry.capabilities || [], model: entry.model
+      capabilities: entry.capabilities || [], model: entry.model, inferenceBackend: entry.inferenceBackend
     }));
     // Publish only self and direct peers. Re-forwarding another compute's roster
     // created a cycle in which a disconnected chat survived forever as a ghost.

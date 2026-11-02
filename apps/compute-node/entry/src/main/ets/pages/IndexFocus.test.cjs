@@ -129,6 +129,7 @@ function setup(isServer) {
           thermalLevel: 2, batteryTemp: 42, cpuUsage: 18, capabilities: ['text', 'vision'] };
       },
       deployedModelName: () => 'Qwen2.5-7B-Instruct-Q4_N_0',
+      deployedInferenceBackend: () => 'gewu',
       formatComputeStatus: () => 'Qwen',
       toDeviceInfoReply: (id, entry) => ({
         type: 'deviceInfo', requestId: id, name: entry.name, model: entry.model,

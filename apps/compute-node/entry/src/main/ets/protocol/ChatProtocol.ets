@@ -38,6 +38,8 @@ export interface DeviceInfoEntry {
   /** Whole-device CPU occupancy 0–100, or -1 when unknown. */
   cpuUsage?: number;
   model?: string;
+  /** Configured engine, independent of the model name; empty means no ready engine. */
+  inferenceBackend?: string;
   modelRequests?: number;
   /**
    * 部署声明的模型能力，如 ['text', 'vision']。
@@ -108,6 +110,8 @@ export interface WireMessage {
   batteryTemp?: number;
   cpuUsage?: number;
   model?: string;
+  /** Configured engine, independent of the model name; empty means no ready engine. */
+  inferenceBackend?: string;
   modelRequests?: number;
   capabilities?: string[];
   /** 部署模型声明的最高强度档位 1-3；仅 deviceInfo 声明携带，消费侧缺省按 2。 */
@@ -219,6 +223,10 @@ function validModelTier(value: number | undefined): boolean {
     (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 3);
 }
 
+function validInferenceBackend(value: string | undefined): boolean {
+  return value === undefined || ['', 'gewu', 'llama.cpp', 'qwenvl'].includes(value);
+}
+
 function validDeviceEntry(entry: DeviceInfoEntry): boolean {
   if (entry === null || typeof entry !== 'object') return false;
   return validOptionalString(entry.id, 128) && validOptionalString(entry.deviceUid, 64) &&
@@ -227,7 +235,7 @@ function validDeviceEntry(entry: DeviceInfoEntry): boolean {
     validOptionalNumber(entry.memTotal) && validOptionalNumber(entry.memAvail) &&
     validOptionalNumber(entry.memUsage) && validOptionalNumber(entry.thermalLevel) &&
     validOptionalNumber(entry.batteryTemp) && validOptionalNumber(entry.cpuUsage) &&
-    validOptionalString(entry.model, 128) &&
+    validOptionalString(entry.model, 128) && validInferenceBackend(entry.inferenceBackend) &&
     validOptionalNumber(entry.modelRequests) &&
     validCapabilities(entry.capabilities, 8) &&
     validModelTier(entry.modelTier) &&
@@ -237,6 +245,7 @@ function validDeviceEntry(entry: DeviceInfoEntry): boolean {
 
 function validDeviceInfo(m: WireMessage): boolean {
   return validOptionalString(m.name, 128) && validOptionalString(m.model, 128) &&
+    validInferenceBackend(m.inferenceBackend) &&
     validOptionalNumber(m.memTotal) && validOptionalNumber(m.memAvail) &&
     validOptionalNumber(m.memUsage) && validOptionalNumber(m.thermalLevel) &&
     validOptionalNumber(m.batteryTemp) && validOptionalNumber(m.cpuUsage) &&

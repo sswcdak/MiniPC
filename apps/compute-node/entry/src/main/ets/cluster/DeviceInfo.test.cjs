@@ -12,6 +12,11 @@ const kits = {
 let registryDirs = [];
 let unionCaps = [];
 let registryTier = 0;
+let llamaConfig = null;
+let llamaModel = '';
+let llamaLayout = false;
+let textDir = '';
+let visionDir = '';
 const context = {
   exports: {}, Error, Map, Math, Number, Date,
   require(name) {
@@ -32,16 +37,22 @@ const context = {
     if (name === '../llm/ModelRegistry') {
       return {
         activeModelDirs: () => registryDirs.slice(),
+        selectModelDir: (_filesDir, needs) => needs.length > 0 ? visionDir : textDir,
+        isLlamaLayout: () => llamaLayout,
         deviceCapabilities: () => unionCaps.slice(),
         deviceTier: () => registryTier
       };
     }
+    if (name === '../llm/LlamaSettings') return {
+      loadLlamaInferenceConfig: () => llamaConfig,
+      configuredLlamaModel: () => llamaModel
+    };
     return {};
   }
 };
 vm.runInNewContext(transpile(__dirname + '/DeviceInfo.ets'), context);
 const { DEVICE_INFO_POLL_MS, sampleMemory, formatHeat, thermalLabel, toDeviceInfoReply, formatComputeStatus,
-  buildSelfEntry, deployedCapabilities, deployedModelName, applyDeviceInfo } = context.exports;
+  buildSelfEntry, deployedCapabilities, deployedModelName, deployedInferenceBackend, applyDeviceInfo } = context.exports;
 assert.equal(DEVICE_INFO_POLL_MS, 2000);
 assert.equal(thermalLabel(0), '清凉');
 assert.equal(thermalLabel(2), '温热');
@@ -102,3 +113,24 @@ for (const bad of [5, 0, '3', 2.5]) {
   assert.equal(peer.modelTier, 1, 'out-of-range modelTier is ignored: ' + JSON.stringify(bad));
 }
 console.log('PASS: thermal/battery/CPU sampling, heat label, deviceInfo reply fields, registry delegation, tier reporting');
+assert.equal(deployedInferenceBackend('/app'), '');
+textDir = 'GEWU';
+assert.equal(deployedInferenceBackend('/app'), 'gewu');
+llamaLayout = true;
+assert.equal(deployedInferenceBackend('/app'), 'llama.cpp');
+textDir = ''; visionDir = 'VL';
+assert.equal(deployedInferenceBackend('/app'), 'qwenvl');
+llamaModel = '/app/models/managed.gguf';
+assert.equal(deployedInferenceBackend('/app'), 'llama.cpp', 'manager configuration has execution priority');
+const managed = buildSelfEntry('/app', 0, 'device', 'id');
+assert.equal(managed.inferenceBackend, 'llama.cpp');
+assert.equal(toDeviceInfoReply('backend', managed).inferenceBackend, 'llama.cpp');
+applyDeviceInfo(peer, {inferenceBackend: 'llama.cpp'});
+assert.equal(peer.inferenceBackend, 'llama.cpp');
+applyDeviceInfo(peer, {modelRequests: 0});
+assert.equal(peer.inferenceBackend, 'llama.cpp', 'legacy telemetry preserves a known engine');
+applyDeviceInfo(peer, {inferenceBackend: ''});
+assert.equal(peer.inferenceBackend, '', 'explicit empty backend clears a previous selection');
+llamaConfig = {model: 'managed.gguf', peerIp: '192.0.2.2', roleMaster: false};
+assert.equal(deployedCapabilities('/app').length, 0, 'llama followers do not advertise independent text work');
+console.log('PASS: configured engine declaration, GGUF fallback, VL-only backend, wire propagation and follower capabilities');

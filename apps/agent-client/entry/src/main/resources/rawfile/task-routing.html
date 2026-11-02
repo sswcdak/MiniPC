@@ -13,6 +13,9 @@
 
 
     .flow-cloud{border-color:#b9a5eb;background:#faf8ff}.flow-cloud .flow-computer{color:#7953b5}.flow-cloud .flow-task{background:#faf8ff;border-color:#dacdf1;color:#61448a}.flow-cloud .flow-task b{color:#7953b5}.flow-cloud .flow-task.working:before{background:#a58bd0}.flow-cloud .flow-lane{background:transparent}.flow-cloud .flow-computer small{color:#7953b5}.flow-cloud .flow-task>span{display:block}.flow-question{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.flow-model{margin-top:4px}.flow-cloud .flow-lane h3{color:#7953b5}.flow-cloud-icon{width:90px;height:72px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.flow-model{display:block;font-size:12px;color:#7953b5;overflow-wrap:anywhere}.flow-wire.cloud{stroke:#9b7ad0}
+.flow-compute.is-pending{border-style:dashed;background:#F7F9FB;box-shadow:none}
+.flow-compute.is-pending .flow-lane h3,.flow-compute.is-pending .flow-computer small{color:#626B85}
+.flow-pending-note{margin:8px 0 0;font-size:24px;line-height:1.5;color:#626B85;overflow-wrap:anywhere}
 #viewport{position:relative;width:100%;height:100%;overflow:hidden;overflow:clip;touch-action:manipulation}#stage{position:absolute;left:0;top:0;width:1000px;transform-origin:top left}.flow-view{width:1000px;padding:8px 20px 16px;min-height:0;overflow:visible}.flow-labels{min-width:960px}.flow-empty{left:370px}#detail{position:fixed;inset:12px;padding:16px;background:#f7fbfa;border:1px solid #d8e5df;border-radius:14px;overflow:auto}#detail[hidden]{display:none}#detailText{white-space:pre-wrap;overflow-wrap:anywhere}#closeDetail{float:right;border:0;border-radius:8px;padding:8px;background:#d8f3ea;color:#0f8a74}
 .flow-labels{font-size:calc(19px / var(--flow-scale,1));font-weight:600;color:#48665b;line-height:1.35;padding-bottom:24px}
 .flow-labels{grid-template-columns:calc(136px * var(--flow-spread,1)) calc(192px * var(--flow-spread,1)) 1fr}
@@ -26,9 +29,6 @@
 .flow-memory{width:200px}.flow-memory>i{height:18px;border-radius:9px}
 .flow-memory>span{font-size:26px;line-height:32px}.flow-memory b{font-weight:700}
 .flow-lane h3{font-size:30px;line-height:36px}.flow-idle{font-size:25px}
-.flow-compute.is-pending{border-style:dashed;background:#F7F9FB;box-shadow:none}
-.flow-compute.is-pending .flow-lane h3,.flow-compute.is-pending .flow-computer small{color:#626B85}
-.flow-pending-note{margin:8px 0 0;font-size:24px;line-height:1.5;color:#626B85;overflow-wrap:anywhere}
 .flow-task>span{font-size:28px}.flow-task b{font-size:42px}
 .flow-compute.is-computing{background:#F8FBFF;border-color:#BDCEE4;box-shadow:0 4px 14px #3B61951A,0 1px 3px #3B61950D;animation:compute-breathe 4s ease-in-out infinite}
 .flow-compute.is-computing .flow-computer{color:#244238}
@@ -42,6 +42,7 @@
 @media(max-width:480px){.flow-labels{font-size:calc(13px / var(--flow-scale,1))}}
 @media(prefers-reduced-motion:reduce){.flow-compute.is-computing{animation:none}}
 </style></head><body><svg style="position:absolute;width:0;height:0" aria-hidden="true"><defs><symbol id="flow-phone" viewBox="0 0 58 87"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="46" height="81" rx="8" fill="#fff"/><rect x="10" y="8" width="38" height="65" rx="3" stroke="#d3d8e1" fill="#fbfcff"/><path d="M24 5h10M24 78h10" stroke-linecap="round"/></g></symbol>
+<symbol id="flow-cluster" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="8" width="30" height="48" rx="4"/><rect x="40" y="8" width="30" height="48" rx="4"/><rect x="76" y="8" width="30" height="48" rx="4"/><path d="M19 56v12h72V56M55 56v19" fill="none"/></g><g fill="none" stroke="#bdc5cf" stroke-width="1.3"><path d="M10 21h18M10 33h18M10 45h18M46 21h18M46 33h18M46 45h18M82 21h18M82 33h18M82 45h18"/></g><g fill="#279a73"><circle cx="13" cy="15" r="1.6"/><circle cx="49" cy="15" r="1.6"/><circle cx="85" cy="15" r="1.6"/></g><circle cx="55" cy="75" r="3" fill="white" stroke="currentColor" stroke-width="1.8"/></symbol>
 <symbol id="flow-pc" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="16" y="4" width="78" height="52" rx="4"/><rect x="21" y="9" width="68" height="41" rx="1.5" stroke="#cbd1da" stroke-width="1.2" fill="#fcfdfd"/><path d="M16 57h78l12 17q1 4-4 4H8q-5 0-4-4z"/><path d="M4 73h102M26 61h58l5 7H22z" stroke="#bdc5cf" stroke-width="1.1"/><path d="M46 71h18l3 5H43z" stroke="#b2bac5" stroke-width="1"/><path d="M34 61l-2 7m15-7-1 7m15-7 1 7m13-7 2 7" stroke="#d1d6de" stroke-width="1"/></g></symbol>
 <symbol id="flow-task-text" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></symbol>
 <symbol id="flow-task-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="16" cy="9" r="1.5"/><path d="m3 17 5-6 5 6 3-3 5 5"/></symbol>
@@ -110,10 +111,17 @@ function allCalls(){return jobs.concat(remoteCalls);}
       if(device&&device.model&&String(device.model).toLowerCase().indexOf('vl')>=0)return '多模态';
       return '纯文本';
     }
+    function isLlamaCluster(device){
+      return !!device&&device.inferenceBackend==='llama.cpp';
+    }
+    function computePublicName(device){
+      const name=publicJobName(device&&device.name,'compute');
+      return isLlamaCluster(device)?(name==='本机'?'算力集群':name.replace(/^算力设备/,'算力集群')):name;
+    }
     function computeDisplayName(device){
       const reported=device&&typeof device.model==='string'?(device.model.trim()||'无可用模型'):'模型待同步';
       const model=reported.replace(/^(.+?-\d+(?:\.\d+)?B)-.+$/i,'$1').replace(/^Qwen3-Next-80B$/i,'Qwen3-80B');
-      return publicJobName(device&&device.name,'compute')+'-'+model;
+      return computePublicName(device)+'-'+model;
     }
     function jobKey(job){
       return String(job.key||job.id||'');
@@ -224,14 +232,14 @@ function allCalls(){return jobs.concat(remoteCalls);}
           sources.map(source=>'<path class="flow-wire '+(activeSource.has(source.id)?'active':'')+'" d="'+sourcePath(sourceY.get(source.id))+'" marker-end="url(#flow-arrow)"/>').join('')+
           rows.map(row=>'<path class="flow-wire '+(row.device.role==='cloud'?'cloud ':'')+(activeTarget.has(row.device.id)?'active':'')+'" d="'+targetPath(targetY.get(row.device.id))+'" marker-end="url(#flow-arrow)"/>').join('')+'</svg>';
         const phones=sources.map(source=>'<div class="flow-phone" data-row-key="source:'+esc(source.id)+'" style="left:'+(68*spread-60)+'px;top:'+(sourceY.get(source.id)-58)+'px"><svg aria-hidden="true"><use href="#flow-phone"/></svg><span>'+esc(source.id==='local-source'?'本机 / 未知来源':publicJobName(source.name,'chat'))+'</span></div>').join('');
-        const router='<div class="flow-router '+(flights.length?'active':'')+'" style="left:'+(232*spread-42)+'px;top:'+(center-35)+'px"><svg aria-hidden="true" viewBox="0 0 48 36"><rect x="2" y="13" width="10" height="10" rx="2"/><rect x="35" y="2" width="10" height="10" rx="2"/><rect x="35" y="24" width="10" height="10" rx="2"/><path d="M12 18h9q4 0 4-4v-3q0-4 4-4h6M21 18q4 0 4 4v3q0 4 4 4h6"/></svg><span>路由中心<br>(算力设备1)</span></div>';
+        const router='<div class="flow-router '+(flights.length?'active':'')+'" style="left:'+(232*spread-42)+'px;top:'+(center-35)+'px"><svg aria-hidden="true" viewBox="0 0 48 36"><rect x="2" y="13" width="10" height="10" rx="2"/><rect x="35" y="2" width="10" height="10" rx="2"/><rect x="35" y="24" width="10" height="10" rx="2"/><path d="M12 18h9q4 0 4-4v-3q0-4 4-4h6M21 18q4 0 4 4v3q0 4 4 4h6"/></svg><span>路由中心<br>('+esc(computePublicName(computers.find(device=>device.name==='算力设备1')||{name:'算力设备1'}))+')</span></div>';
         const boxes=rows.map(row=>{
           const d=row.device;
           if(d.role==='cloud')return '<section class="flow-compute flow-cloud" data-row-key="cloud-executor" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="云端路由"><div class="flow-computer"><svg class="flow-cloud-icon" viewBox="0 0 100 72" aria-hidden="true"><path d="M25 57h52a15 15 0 0 0 1-30 25 25 0 0 0-48-7 18 18 0 0 0-5 37Z"/><path d="M39 39h22m-7-7 7 7-7 7"/></svg><span>云端推理</span><small>已路由至云端</small></div><div class="flow-lane busy"><h3>推理中 · '+row.active.length+' 个任务</h3>'+row.active.map(flowCard).join('')+'</div></section>';
           if(d.pendingInfo)return '<section class="flow-compute is-pending" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="算力设备，信息待同步"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#flow-pc"/></svg></div><span>算力设备</span><small>已计入在线总数</small></div><div class="flow-lane"><h3>信息待同步</h3><p class="flow-pending-note">等待路由中心同步<br>设备名称与模型</p></div></section>';
           const mem=typeof d.memUsage==='number'&&Number.isFinite(d.memUsage)&&d.memUsage>=0?Math.min(100,d.memUsage):null;
           const memory='<div class="flow-memory" aria-label="内存 '+(mem===null?'未采集':mem+'%')+'"><i><em style="width:'+(mem===null?0:mem)+'%;background:'+(mem>50?'#e1b43b':'#279a73')+'"></em></i><span>内存<b>'+(mem===null?'—':Math.round(mem)+'%')+'</b></span></div>';
-          return '<section class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#flow-pc"/></svg>'+(d.role==='self'?'<span class="flow-pc-local">本机</span>':'')+'</div><span title="'+esc(computeDisplayName(d))+'">'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'推理中':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
+          return '<section class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#'+(isLlamaCluster(d)?'flow-cluster':'flow-pc')+'"/></svg>'+(d.role==='self'&&!isLlamaCluster(d)?'<span class="flow-pc-local">本机</span>':'')+'</div><span title="'+esc(computeDisplayName(d))+'">'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'推理中':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
         }).join('');
         const packets=flights.filter(item=>targetY.has(item.executor)).map(item=>{
           const y=sourceY.get(item.origin||'local-source')||center;

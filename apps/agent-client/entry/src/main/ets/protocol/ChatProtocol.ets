@@ -47,6 +47,8 @@ export interface DeviceInfoEntry {
   /** Whole-device CPU occupancy 0–100, or -1 when unknown. */
   cpuUsage?: number;
   model?: string;
+  /** Configured engine, independent of the model name; empty means no ready engine. */
+  inferenceBackend?: string;
   modelRequests?: number;
   ready?: boolean;
   slot?: number;
@@ -109,6 +111,8 @@ export interface WireMessage {
   batteryTemp?: number;
   cpuUsage?: number;
   model?: string;
+  /** Configured engine, independent of the model name; empty means no ready engine. */
+  inferenceBackend?: string;
   modelRequests?: number;
   devices?: DeviceInfoEntry[];
   slot?: number;
@@ -183,6 +187,10 @@ function validOptionalCapabilities(value: string[] | undefined): boolean {
     value.every((item: string): boolean => typeof item === 'string' && item.length <= 32));
 }
 
+function validInferenceBackend(value: string | undefined): boolean {
+  return value === undefined || ['', 'gewu', 'llama.cpp', 'qwenvl'].includes(value);
+}
+
 function validDeviceEntry(entry: DeviceInfoEntry): boolean {
   if (entry === null || typeof entry !== 'object') return false;
   return validOptionalString(entry.id, 128) && validOptionalString(entry.deviceUid, 64) &&
@@ -191,7 +199,7 @@ function validDeviceEntry(entry: DeviceInfoEntry): boolean {
     validOptionalNumber(entry.memTotal) && validOptionalNumber(entry.memAvail) &&
     validOptionalNumber(entry.memUsage) && validOptionalNumber(entry.thermalLevel) &&
     validOptionalNumber(entry.batteryTemp) && validOptionalNumber(entry.cpuUsage) &&
-    validOptionalString(entry.model, 128) && validOptionalCapabilities(entry.capabilities) &&
+    validOptionalString(entry.model, 128) && validInferenceBackend(entry.inferenceBackend) && validOptionalCapabilities(entry.capabilities) &&
     validOptionalNumber(entry.modelRequests) &&
     (entry.ready === undefined || typeof entry.ready === 'boolean') &&
     (entry.slot === undefined || (Number.isInteger(entry.slot) && entry.slot >= 1 && entry.slot <= 64));
@@ -199,6 +207,7 @@ function validDeviceEntry(entry: DeviceInfoEntry): boolean {
 
 function validDeviceInfo(m: WireMessage): boolean {
   return validOptionalString(m.name, 128) && validOptionalString(m.model, 128) &&
+    validInferenceBackend(m.inferenceBackend) &&
     validOptionalCapabilities(m.capabilities) &&
     validOptionalNumber(m.memTotal) && validOptionalNumber(m.memAvail) &&
     validOptionalNumber(m.memUsage) && validOptionalNumber(m.thermalLevel) &&

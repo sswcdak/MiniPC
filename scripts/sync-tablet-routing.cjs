@@ -13,17 +13,17 @@ const previous = fs.existsSync(target) ? fs.readFileSync(target, 'utf8').replace
 // The chat view also handles cloud executors. Keep that adapter when refreshing shared assets.
 const hasCloudAdapter = previous.includes('.flow-cloud{');
 const cloudCss = hasCloudAdapter ? (previous.match(/^    \.flow-cloud\{.*$/m)?.[0] || '') : '';
-const css = part('    .flow-view{', '</style>') + '\n' + cloudCss;
+const pendingCss=previous.split('\n').filter(line=>/^\.flow-(compute\.is-pending|pending-note)/.test(line)).join('\n');
+const css = part('    .flow-view{', '</style>') + '\n' + cloudCss + '\n' + pendingCss;
 const symbols = [...source.matchAll(/<symbol id="flow-[\s\S]*?<\/symbol>/g)].map(m=>m[0]).join('\n');
 let helpers = part('    function summaryText(', '    function focusWithoutScroll(')+
  part('    function morphNode(', '    function phaseView(')+
  part('    function esc(', source.includes('    function sideClass(') ? '    function sideClass(' : '    function shortModel(')+
  part('    function publicJobName(', '    function updateButton(')+
  part('    function jobKey(', '    // The rail is rebuilt');
-// Device model names come from compute telemetry, not capability-derived labels.
-helpers=helpers.replace("return publicJobName(device&&device.name,'compute')+'-'+computeKindLabel(device);",
- `const model=device&&typeof device.model==='string'?(device.model.trim()||'无可用模型'):'模型待同步';
-      return publicJobName(device&&device.name,'compute')+'-'+model;`);
+// Keep tablet model-name shortening and backend display rules when regenerating assets.
+const tabletDisplayName=previous.match(/    function computeDisplayName\(device\)\{[\s\S]*?\n    \}/);
+if(tabletDisplayName)helpers=helpers.replace(/    function computeDisplayName\(device\)\{[\s\S]*?\n    \}/,tabletDisplayName[0]);
 let renderer = part('    const flowView=', '    function setTaskView(');
 if (hasCloudAdapter) {
  const start=previous.indexOf('    const flowView='), end=previous.indexOf('\nconst viewport=',start);

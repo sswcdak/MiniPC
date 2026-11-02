@@ -69,6 +69,7 @@ plan/
 # 期望清单见 apps/compute-node/entry/src/main/cpp/libs.manifest.json
 **/entry/src/main/cpp/libs/
 **/*.so
+**/*.so.*
 
 # DevEco 生成的本地 C++ 语言服务配置
 **/.clangd
