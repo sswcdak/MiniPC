@@ -1,8 +1,8 @@
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
-import { fileIo } from '@kit.CoreFileKit';
+import { fileIo, picker } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LocalChat, ChatUpdate } from '../llm/LocalChat';
 import { InferCardHooks, InferenceHost } from '../llm/InferenceHost';
@@ -99,6 +99,10 @@ struct Index {
     }, () => { this.pickImage(); }, () => { this.clearFinishedJobs(); }, () => { this.pendingImage = ''; },
     (model: string): string => this.selectModel(model),
     (): string => IS_SERVER && this.filesDir.length > 0 ? JSON.stringify(this.modelSettings()) : 'null',
+    (): string => this.importLlamaModel(),
+    (): string => this.model?.llamaStatusJson() ?? '{"state":"idle"}',
+    (): boolean => this.takeLlamaFirstOpen(),
+    (): void => { this.openLlamaManager(); },
     (mode: string): string => this.setOutputMode(mode),
     (): string => usageSettingsJson(this.usage),
     (payload: string): string => this.saveUsageSettings(payload),
@@ -452,6 +456,28 @@ struct Index {
       QwenVlManager.getInstance().isBusy();
   }
 
+  private takeLlamaFirstOpen(): boolean {
+    if (this.filesDir.length === 0) return false;
+    const marker = this.filesDir + '/llama-ui-opened-v8';
+    try {
+      if (fileIo.accessSync(marker)) return false;
+    } catch (_) {
+      // Missing files may throw on older fileIo implementations.
+    }
+    try {
+      const file = fileIo.openSync(marker,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      fileIo.closeSync(file);
+    } catch (_) {}
+    return true;
+  }
+
+  private openLlamaManager(): void {
+    router.pushUrl({ url: 'pages/LlamaManager' }).catch((error: Error): void => {
+      hilog.warn(0, 'NearbyChat', 'open LlamaManager failed=%{public}s', error.message);
+    });
+  }
+
   private modelSettings(): ModelSettingsView {
     const selection = modelSelection(this.filesDir);
     const options = readyModelDirs(this.filesDir).map((dir: string): ModelChoiceView => {
@@ -481,6 +507,71 @@ struct Index {
     this.rosterDeliveries.clear();
     this.emitDashboard();
     return '';
+  }
+
+  private importLlamaModel(): string {
+    if (!IS_SERVER || this.filesDir.length === 0) return '模型服务尚未初始化。';
+    this.importLlamaModelAsync().catch((error: Error) => {
+      hilog.error(0, 'NearbyChat', 'GGUF import failed: %{public}s', error.message);
+      this.emit({ kind: 'llama-import-error', text: '模型导入失败：' + error.message });
+      promptAction.showToast({ message: '模型导入失败：' + error.message });
+    });
+    return '正在导入 GGUF 模型…';
+  }
+
+  private fileNameFromUri(uri: string): string {
+    const plain = decodeURIComponent(uri);
+    const slash = plain.lastIndexOf('/');
+    return slash >= 0 ? plain.substring(slash + 1) : plain;
+  }
+
+  private async importLlamaModelAsync(): Promise<void> {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const documentPicker = new picker.DocumentViewPicker(context);
+    const options = new picker.DocumentSelectOptions();
+    options.maxSelectNumber = 64;
+    options.fileSuffixFilters = ['GGUF 模型|.gguf'];
+    const uris = await documentPicker.select(options);
+    if (uris.length === 0) return;
+
+    const names = uris.map((uri: string): string => this.fileNameFromUri(uri));
+    const shardNames = names.filter((name: string): boolean => /-\d{5}-of-\d{5}\.gguf$/i.test(name));
+    if (shardNames.length > 0 && shardNames.length !== names.length) {
+      throw new Error('请一次选择单文件模型，或同一模型的全部 GGUF 分片。');
+    }
+    if (shardNames.length === 0 && names.length > 1) {
+      throw new Error('多个单文件模型请逐个导入。');
+    }
+    const first = shardNames.find((name: string): boolean => /-00001-of-\d{5}\.gguf$/i.test(name)) ||
+      (shardNames.length > 0 ? shardNames[0] : names[0]);
+    const modelName = (first.replace(/-00001-of-\d{5}\.gguf$/i, '').replace(/\.gguf$/i, ''))
+      .replace(/[\\/:*?"<>|]/g, '_');
+    if (modelName.length === 0) throw new Error('无法识别模型文件名。');
+
+    try { fileIo.mkdirSync(this.filesDir + '/models'); } catch (_) {}
+    const modelDir = this.filesDir + '/models/' + modelName;
+    try { fileIo.mkdirSync(modelDir); } catch (_) {}
+    for (let index = 0; index < uris.length; index++) {
+      const source = fileIo.openSync(uris[index], fileIo.OpenMode.READ_ONLY);
+      try {
+        fileIo.copyFileSync(source.fd, modelDir + '/' + names[index]);
+      } finally {
+        fileIo.closeSync(source);
+      }
+    }
+    const configFile = fileIo.openSync(modelDir + '/llama.json',
+      fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+    try {
+      fileIo.writeSync(configFile.fd, JSON.stringify({
+        model: first, context: 8192, tier: 2, capabilities: ['text']
+      }));
+    } finally {
+      fileIo.closeSync(configFile);
+    }
+    this.rosterDeliveries.clear();
+    this.emitDashboard();
+    this.emit({ kind: 'llama-imported', text: 'GGUF 模型已导入：' + modelName });
+    promptAction.showToast({ message: 'GGUF 模型已导入：' + modelName });
   }
 
   private setOutputMode(mode: string): string {
@@ -1788,7 +1879,7 @@ struct Index {
       Web({ src: $rawfile('peer-chat.html'), controller: this.controller })
         .javaScriptAccess(true)
         .domStorageAccess(false)
-        .javaScriptProxy({ object: this.bridge, name: 'chatBridge', methodList: ['send', 'stop', 'connect', 'prepare', 'pickImage', 'clear', 'clearImage', 'selectModel', 'models', 'setOutputMode', 'usageSettings', 'saveUsageSettings', 'setRouterAlgorithm'], controller: this.controller })
+        .javaScriptProxy({ object: this.bridge, name: 'chatBridge', methodList: ['send', 'stop', 'connect', 'prepare', 'pickImage', 'clear', 'clearImage', 'selectModel', 'models', 'importModel', 'llamaStatus', 'takeLlamaFirstOpen', 'openLlamaManager', 'setOutputMode', 'usageSettings', 'saveUsageSettings', 'setRouterAlgorithm'], controller: this.controller })
         .onPageEnd(() => {
           this.pageReady = true;
           this.channel.subscribe(
@@ -1796,6 +1887,14 @@ struct Index {
             (connected: boolean, epoch: number) => this.connectionChanged(connected, epoch));
           this.showConnection();
           if (this.autoConnect) this.ensureCollaborationReady(false);
+          const firstLlamaOpen = this.takeLlamaFirstOpen();
+          hilog.info(0, 'NearbyChat', 'Llama management first-open=%{public}s', String(firstLlamaOpen));
+          if (firstLlamaOpen) {
+            setTimeout((): void => {
+              this.openLlamaManager();
+              hilog.info(0, 'NearbyChat', 'Llama management page opened');
+            }, 500);
+          }
         })
         .onLoadIntercept((event) => !event.data.getRequestUrl().startsWith('resource://rawfile/'))
         .width('100%').height('100%').backgroundColor('#FFF9F4')

@@ -20,6 +20,13 @@ export interface ModelManifest {
   tier?: number;
 }
 
+export interface LlamaModelConfig {
+  model?: string;
+  context?: number;
+  tier?: number;
+  capabilities?: string[];
+}
+
 interface ApiConfig {
   name?: string;
   type?: string;
@@ -32,6 +39,9 @@ const MODEL_FILES: string[] = ['api_config.json', 'params', 'tokenizer.json'];
 const VL_MODEL_FILES: string[] = ['vl_params', 'tokenizer.json'];
 /** VL 布局标记文件：存在即按多模态目录处理。 */
 const VL_MARK_FILE: string = 'vl_params';
+/** GGUF 目录的配置标记；缺失时按目录内首个 GGUF 自动发现。 */
+const LLAMA_MARK_FILE: string = 'llama.json';
+const DEFAULT_LLAMA_CONTEXT: number = 8192;
 const SCAN_CACHE_MS: number = 1500;
 
 class ScanCache {
@@ -89,8 +99,68 @@ export function isVlLayout(modelDir: string): boolean {
   } catch (_) { return false; }
 }
 
+function llamaConfig(modelDir: string): LlamaModelConfig {
+  try {
+    const value = JSON.parse(fileIo.readTextSync(modelDir + '/' + LLAMA_MARK_FILE)) as LlamaModelConfig;
+    return value !== null && typeof value === 'object' ? value : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+/** A directory is llama.cpp-backed when it has llama.json or at least one GGUF shard. */
+export function isLlamaLayout(modelDir: string): boolean {
+  try {
+    if (fileIo.accessSync(modelDir + '/' + LLAMA_MARK_FILE)) return true;
+  } catch (_) {}
+  try {
+    return (fileIo.listFileSync(modelDir) as string[]).some((name: string): boolean =>
+      /\.gguf$/i.test(name));
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Resolve the configured model file, or the first shard / first GGUF in the directory. */
+export function llamaModelFile(modelDir: string): string {
+  const configured = llamaConfig(modelDir).model;
+  if (typeof configured === 'string' && configured.length > 0) return modelDir + '/' + configured;
+  try {
+    const names = (fileIo.listFileSync(modelDir) as string[]).filter((name: string): boolean =>
+      /\.gguf$/i.test(name));
+    const firstShard = names.find((name: string): boolean => /-00001-of-\d{5}\.gguf$/i.test(name));
+    if (firstShard !== undefined) return modelDir + '/' + firstShard;
+    names.sort();
+    return names.length > 0 ? modelDir + '/' + names[0] : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+/** llama.cpp context budget; defaults to the app's conservative local text budget. */
+export function llamaContextTokens(modelDir: string): number {
+  const value = llamaConfig(modelDir).context;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 512 ?
+    Math.min(32768, value) : DEFAULT_LLAMA_CONTEXT;
+}
+
 /** 就绪检查：目录内关键文件均可读且非空；通过返回空串。文件集按布局区分。 */
 export function readinessOf(modelDir: string): string {
+  if (isLlamaLayout(modelDir)) {
+    const modelFile = llamaModelFile(modelDir);
+    if (modelFile.length === 0) return 'GGUF 模型文件缺失';
+    try {
+      const file = fileIo.openSync(modelFile, fileIo.OpenMode.READ_ONLY);
+      try {
+        if (fileIo.readSync(file.fd, new ArrayBuffer(1)) !== 1) return 'GGUF 模型文件为空';
+      } finally {
+        fileIo.closeSync(file);
+      }
+      return '';
+    } catch (_) {
+      return 'GGUF 模型文件无法读取';
+    }
+  }
   const files = isVlLayout(modelDir) ? VL_MODEL_FILES : MODEL_FILES;
   for (const name of files) {
     try {
@@ -134,6 +204,11 @@ export function readyModelDirs(filesDir: string): string[] {
 
 /** 单个就绪目录声明的能力：清单缺失/损坏 → 缺省（文本布局 ['text']；VL 布局 ['text','vision']，vl_params 本身就是多模态权重标志）；未知标签丢弃、去重。 */
 export function manifestCapabilities(filesDir: string, modelDir: string): string[] {
+  const fullDir = filesDir + '/models/' + modelDir;
+  if (isLlamaLayout(fullDir)) {
+    // The direct llama.cpp path is text-only until a vision projector is wired.
+    return ['text'];
+  }
   try {
     const manifest = JSON.parse(fileIo.readTextSync(filesDir + '/models/' + modelDir + '/manifest.json')) as ModelManifest;
     const declared: string[] = manifest.capabilities === undefined ? [] : manifest.capabilities;
@@ -163,6 +238,11 @@ export function deviceCapabilities(filesDir: string): string[] {
 
 /** 单个就绪目录声明的强度档位（1-2）；缺失/损坏/越界 → 2 强档（fail open）。 */
 export function manifestTier(filesDir: string, modelDir: string): number {
+  const fullDir = filesDir + '/models/' + modelDir;
+  if (isLlamaLayout(fullDir)) {
+    const tier = llamaConfig(fullDir).tier;
+    return typeof tier === 'number' && Number.isInteger(tier) && tier >= 1 && tier <= 2 ? tier : 2;
+  }
   try {
     const manifest = JSON.parse(fileIo.readTextSync(filesDir + '/models/' + modelDir + '/manifest.json')) as ModelManifest;
     const tier = manifest.tier;

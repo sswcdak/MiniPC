@@ -8,6 +8,10 @@ export class ChatBridge {
   private onClearImage: () => void;
   private onSelectModel: (model: string) => string;
   private onModels: () => string;
+  private onImportModel: () => string;
+  private onLlamaStatus: () => string;
+  private onTakeLlamaFirstOpen: () => boolean;
+  private onOpenLlamaManager: () => void;
   private onSetOutputMode: (mode: string) => string;
   private onUsageSettings: () => string;
   private onSaveUsageSettings: (payload: string) => string;
@@ -16,6 +20,10 @@ export class ChatBridge {
     pick: () => void, clear: () => void = (): void => {}, clearImage: () => void = (): void => {},
     selectModel: (model: string) => string = (): string => '当前设备不支持切换模型。',
     models: () => string = (): string => 'null',
+    importModel: () => string = (): string => '当前设备不支持导入模型。',
+    llamaStatus: () => string = (): string => '{"state":"error","error":"unsupported"}',
+    takeLlamaFirstOpen: () => boolean = (): boolean => false,
+    openLlamaManager: () => void = (): void => {},
     setOutputMode: (mode: string) => string = (): string => '当前设备不支持切换输出方式。',
     usageSettings: () => string = (): string => 'null',
     saveUsageSettings: (payload: string) => string = (payload: string): string =>
@@ -26,6 +34,10 @@ export class ChatBridge {
     this.onClearImage = clearImage;
     this.onSelectModel = selectModel;
     this.onModels = models;
+    this.onImportModel = importModel;
+    this.onLlamaStatus = llamaStatus;
+    this.onTakeLlamaFirstOpen = takeLlamaFirstOpen;
+    this.onOpenLlamaManager = openLlamaManager;
     this.onSetOutputMode = setOutputMode;
     this.onUsageSettings = usageSettings;
     this.onSaveUsageSettings = saveUsageSettings;
@@ -40,6 +52,10 @@ export class ChatBridge {
   clearImage(): void { this.onClearImage(); }
   selectModel(model: string): string { return this.onSelectModel(model); }
   models(): string { return this.onModels(); }
+  importModel(): string { return this.onImportModel(); }
+  llamaStatus(): string { return this.onLlamaStatus(); }
+  takeLlamaFirstOpen(): boolean { return this.onTakeLlamaFirstOpen(); }
+  openLlamaManager(): void { this.onOpenLlamaManager(); }
   setOutputMode(mode: string): string { return this.onSetOutputMode(mode); }
   usageSettings(): string { return this.onUsageSettings(); }
   saveUsageSettings(payload: string): string { return this.onSaveUsageSettings(payload); }

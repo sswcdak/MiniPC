@@ -24,6 +24,36 @@ HarmonyOS NEXT 算力应用，使用 GEWU/KNPU 运行本地模型，并作为近
 - llm/LocalChat 与 cpp/gewu_probe.cpp：Native 模型请求和清理。
 - cluster/DevicePool：能力、档位和负载选点；nearby/LinkEnhanceChannel：组网、编号和接管。
 
+## GGUF / llama.cpp 同进程推理
+
+`entry/src/main/cpp/llama_probe.cpp` 直接把 llama.cpp CPU 运行时编入本应用。
+设置页的“导入 GGUF”会把单文件或完整分片复制到：
+
+```text
+filesDir/models/<模型名>/
+  model.gguf                 # 或同一模型的 *_00001-of-*.gguf 等全部分片
+  llama.json                 # 可选配置
+```
+
+`llama.json` 可选字段：
+
+```json
+{
+  "model": "model.gguf",
+  "context": 8192,
+  "tier": 2,
+  "capabilities": ["text"]
+}
+```
+
+运行时通过 `libllama_probe.so` 直接调用
+`llama_model_load_from_file`、`llama_chat_apply_template` 和 `llama_decode`，
+不启动 8080 HTTP 服务，也不再需要同时安装 `llama-server-ohos`。当前直调通道只声明
+`text` 能力；GGUF 视觉投影尚未接入。
+
+原生库由 `scripts/place-llama-runtime.ps1` 从 llama-server-ohos 的已构建
+`arm64-v8a` 产物同步，使用前先构建该工程。
+
 ## 多模态（Qwen2.5-VL-3B-NPU）
 
 带图请求走本机 VL 引擎（`libqwenvl_engine.so` + NPU 版 `libqwen2vl_sdk.so` + 22 库 `libai_runtime` 闭包）。这些 `.so` 是**私有预编译产物，不在仓库内**，需本机放置到 `entry/src/main/cpp/libs/arm64-v8a/` 后随 HAP 打包：清单见 `entry/src/main/cpp/libs.manifest.json`，放置脚本 `scripts/place-vl-libs.ps1`。

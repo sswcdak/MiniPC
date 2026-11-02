@@ -9,6 +9,17 @@ RemoteComputeModel → InferenceClient → InferenceRelay
   → InferenceHost → LocalChat → libgewu_probe.so → GEWU / KNPU
 ```
 
+`LocalChat` 也支持同进程 llama.cpp 后端：模型目录含 GGUF 时改为
+
+```text
+InferenceHost → LocalChat → libllama_probe.so
+  → llama_chat_apply_template / llama_decode
+```
+
+该路径不使用 HTTP server。模型通过算力端设置页导入到
+`filesDir/models/<模型名>/`，可选 `llama.json` 指定模型文件、上下文、档位和能力。
+第一版只公告 `text`，不把 GGUF 目录当作视觉模型。
+
 算力端 Native 源码位于 [gewu_probe.cpp](../apps/compute-node/entry/src/main/cpp/gewu_probe.cpp)。LocalChat 从应用 `filesDir/models/Qwen2.5-7B-Instruct-Q4_N_0` 读取 api_config.json、params、tokenizer.json。Native 会话当前使用 knpu 和 max_ctx=32768；基础 legacy 双端另使用自己的会话配置。
 
 LocalChat 管理请求标识、回调、取消与清理。InferenceHost 负责请求准入、结果消息与任务展示；一次本地推理结束不等于整个 Agent 任务结束。SDK 构建仍依赖设备提供 libqos 等系统能力，部署步骤见 [构建与运行](build-and-run.md)。

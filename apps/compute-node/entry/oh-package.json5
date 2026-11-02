@@ -4,6 +4,7 @@
   "description": "Static peer-chat UI.",
   "dependencies": {
     "libgewu_probe.so": "file:./src/main/cpp/types/libgewu_probe",
+    "libllama_probe.so": "file:./src/main/cpp/types/libllama_probe",
     "libqwenvl_engine.so": "file:./src/main/cpp/types/libqwenvl_engine"
   }
 }

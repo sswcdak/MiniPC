@@ -100,3 +100,40 @@ else()
   target_link_libraries(qwenvl_engine PUBLIC libace_napi.z.so libhilog_ndk.z.so)
 
 endif()
+
+# ---- llama.cpp direct NAPI（与 GEWU 同进程，不经过 HTTP）----
+# Runtime libraries are built from the local llama.cpp tree used by the
+# llama-server-ohos application. The HAP carries the CPU backend only.
+set(LLAMA_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama/${OHOS_ARCH}")
+foreach(LLAMA_TARGET IN ITEMS llama_runtime ggml_runtime ggml_base_runtime ggml_cpu_runtime ggml_rpc_runtime llama_openmp)
+    add_library(${LLAMA_TARGET} SHARED IMPORTED)
+endforeach()
+set_target_properties(llama_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libllama.so.0.3.0")
+set_target_properties(ggml_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libggml.so.0.22.0")
+set_target_properties(ggml_base_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libggml-base.so.0.22.0")
+set_target_properties(ggml_cpu_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libggml-cpu.so.0.22.0")
+set_target_properties(ggml_rpc_runtime PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libggml-rpc.so.0.22.0")
+set_target_properties(llama_openmp PROPERTIES
+    IMPORTED_LOCATION "${LLAMA_RUNTIME_DIR}/libomp.so")
+
+add_library(llama_probe SHARED llama_probe.cpp)
+target_include_directories(llama_probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/llama/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/llama/include/ggml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/llama/vendor")
+target_link_libraries(llama_probe PUBLIC
+    libace_napi.z.so
+    libhilog_ndk.z.so
+    llama_runtime
+    ggml_runtime
+    ggml_base_runtime
+    ggml_cpu_runtime
+    ggml_rpc_runtime
+    llama_openmp)
+target_link_options(llama_probe PRIVATE "-Wl,--no-as-needed")
+target_compile_features(llama_probe PRIVATE cxx_std_17)
