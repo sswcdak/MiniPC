@@ -371,13 +371,14 @@ size_t availableMemoryMiB() {
 
 /**
  * The OHOS llama.cpp build uses memory_budget for weight placement rather than
- * a kernel-enforced RSS limit. Keep 30% of currently available RAM outside the
- * model for mmap and context allocations.
+ * a kernel-enforced RSS limit. Never let placement consume more than 80% of
+ * currently available RAM; the remaining fifth is reserved for mmap, KV cache,
+ * graph buffers and the application.
  */
 size_t safeMemoryBudgetMiB(size_t requested, size_t & available) {
     available = availableMemoryMiB();
     if (available == 0) return requested;
-    const size_t usable = available / 10 * 7;
+    const size_t usable = available - available / 5;
     return requested == 0 || usable < requested ? usable : requested;
 }
 
@@ -766,11 +767,16 @@ public:
         ensureLogCapture();
         g_statusDiskBytes.store(modelDirectoryBytes(modelPath));
 
-        std::vector<std::string> args = serverArguments(modelPath, contextSize, options);
+        size_t availableMiB = 0;
+        RuntimeOptions runtimeOptions = options;
+        runtimeOptions.memoryBudgetMb = safeMemoryBudgetMiB(options.memoryBudgetMb, availableMiB);
+        std::vector<std::string> args = serverArguments(modelPath, contextSize, runtimeOptions);
         OH_LOG_INFO(LOG_APP,
             "server startup model=%{public}s context=%{public}d budgetMiB=%{public}zu "
+            "requestedMiB=%{public}zu availableMiB=%{public}zu "
             "hotCold=%{public}d prefetch=%{public}d rank=%{public}d/%{public}d follower=%{public}d",
-            modelPath.c_str(), contextSize, options.memoryBudgetMb, options.ffnHotCold ? 1 : 0,
+            modelPath.c_str(), contextSize, runtimeOptions.memoryBudgetMb,
+            options.memoryBudgetMb, availableMiB, options.ffnHotCold ? 1 : 0,
             options.prefetch ? 1 : 0, options.distRank, options.distRanks,
             options.distFollower ? 1 : 0);
         const auto started = Clock::now();
