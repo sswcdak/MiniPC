@@ -39,7 +39,7 @@ import {
 import { getLocalLlmBinding } from '../llm/LocalLlmBinding';
 import { nearbyChannel } from '../nearby/LinkEnhanceChannel';
 import { inferenceClient, INFERENCE_STOPPED } from '../model/InferenceClient';
-import { TaskChildSnapshot, TaskSnapshot, WireMessage } from '../protocol/ChatProtocol';
+import { DeviceInfoEntry, TaskChildSnapshot, TaskSnapshot, WireMessage } from '../protocol/ChatProtocol';
 import { ConcurrentChatTask, ChatTaskInput, ChatTaskUpdate } from '../model/ConcurrentChatTask';
 import { TaskConversationLedger } from '../model/TaskConversationLedger';
 import { TaskReporter } from '../model/TaskReporter';
@@ -311,6 +311,7 @@ struct Index {
   @State viewportHeight: number = 1000;
   @State sessionDrawerVisible: boolean = false;
   @State routingJson: string = '{}';
+  @State routingRevision: number = 0;
   private routingStore: TaskRoutingStore = new TaskRoutingStore();
   private deviceInfoPoller: DeviceInfoPoller = new DeviceInfoPoller(
     (message: WireMessage, epoch: number): Promise<boolean> => nearbyChannel.send(message, epoch));
@@ -497,6 +498,22 @@ struct Index {
       this.deviceInfoPoller.acknowledge(message, epoch);
       this.routingStore.receive(message, epoch, nearbyChannel.connectedComputeInfo());
       this.refreshRoutingView();
+      if (message.type === 'deviceInfoSync') {
+        const received = message.devices ?? [];
+        const computes = received.filter((device: DeviceInfoEntry): boolean =>
+          device.role === 'self' || device.role === 'compute');
+        let projected: number = -1;
+        try {
+          const snapshot = JSON.parse(this.routingJson) as WireMessage;
+          projected = (snapshot.devices ?? []).filter((device: DeviceInfoEntry): boolean =>
+            device.role === 'self' || device.role === 'compute').length;
+        } catch (_) { /* Diagnostics cannot interrupt the connection. */ }
+        this.routingRevision++;
+        hilog.info(0, 'NearbyChat', 'tablet-roster revision=%{public}d epoch=%{public}d entries=%{public}d computes=%{public}d projected=%{public}d members=%{public}s',
+          this.routingRevision, epoch, received.length, computes.length, projected,
+          computes.map((device: DeviceInfoEntry): string => (device.deviceUid || device.id || 'unknown') +
+            '@' + String(device.slot || 0)).join(','));
+      }
     }, (connected: boolean, _epoch: number): void => {
       if (!connected) { this.routingStore.clear(); this.deviceInfoPoller.clear(); }
       if (this.pageActive) { this.refreshRoutingView(); }
@@ -1231,7 +1248,7 @@ struct Index {
     } else {
       Column({ space: 8 }) {
         this.routingHeader()
-        TaskRoutingView({ eventJson: this.routingJson }).width('100%').layoutWeight(1)
+        TaskRoutingView({ eventJson: this.routingJson, refreshRevision: this.routingRevision }).width('100%').layoutWeight(1)
       }.width('100%').layoutWeight(5).constraintSize({ minHeight: 120 }).padding(12).backgroundColor(Color.White).borderRadius(16)
     }
   }
