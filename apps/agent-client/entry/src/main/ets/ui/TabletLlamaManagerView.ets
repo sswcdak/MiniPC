@@ -69,7 +69,7 @@ interface TabletLlamaState {
 
 const ORIGINAL_MODEL_MEMORY_BYTES: number = 45 * 1024 * 1024 * 1024;
 const OFFLOAD_HOST_A: string = '#3F786B';
-const OFFLOAD_HOST_B: string = '#70A26F';
+const OFFLOAD_HOST_B: string = '#5F86B3';
 const OFFLOAD_FLASH: string = '#D79535';
 const OFFLOAD_MODEL: string = '#C77B61';
 const OFFLOAD_THREE_BARS: number[] = [0, 1, 2];
@@ -600,8 +600,8 @@ export struct TabletLlamaManagerView {
   offloadUnitContent(name: string, amount: string, color: string, background: string,
     gap: boolean, barCount: number) {
     Column({ space: 2 }) {
-      Text(name).fontSize(11).fontWeight(FontWeight.Bold).fontColor('#5E7069')
-      Text(amount).fontSize(11).fontWeight(FontWeight.Medium).fontColor('#435750')
+      Text(name).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#5E7069')
+      Text(amount).fontSize(13).fontWeight(FontWeight.Medium).fontColor('#435750')
       Row({ space: 3 }) {
         ForEach(barCount === 6 ? OFFLOAD_SIX_BARS : OFFLOAD_THREE_BARS, (index: number) => {
           if (gap) {
@@ -669,8 +669,8 @@ export struct TabletLlamaManagerView {
         Row({ space: 12 }) {
           Row({ space: 3 }) {
             Text('45').fontSize(34).fontWeight(FontWeight.Bold).fontColor('#18211C')
-            Text('G').fontSize(12).fontWeight(FontWeight.Bold).fontColor('#6D756F')
-              .margin({ bottom: 6 })
+            Text('G').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#5E6B66')
+              .margin({ bottom: 4 })
           }
           .alignItems(VerticalAlign.Bottom)
           Row({ space: 4 }) {
@@ -717,7 +717,7 @@ export struct TabletLlamaManagerView {
         Row({ space: 5 }) {
           this.offloadUnit('主机 A', '可用 15G', OFFLOAD_HOST_A, '#EEF7F4', false, 3)
           this.offloadPlus()
-          this.offloadUnit('主机 B', '可用 15G', OFFLOAD_HOST_B, '#F1F8F0', false, 3)
+          this.offloadUnit('主机 B', '可用 15G', OFFLOAD_HOST_B, '#EEF4FA', false, 3)
           this.offloadPlus()
           this.offloadUnit('容量缺口', '15G', OFFLOAD_MODEL, '#FBF4F1', true, 3)
         }
@@ -735,7 +735,7 @@ export struct TabletLlamaManagerView {
         Row({ space: 5 }) {
           this.offloadUnit('主机 A', '可用 15G', OFFLOAD_HOST_A, '#EEF7F4', false, 3)
           this.offloadPlus()
-          this.offloadUnit('主机 B', '可用 15G', OFFLOAD_HOST_B, '#F1F8F0', false, 3)
+          this.offloadUnit('主机 B', '可用 15G', OFFLOAD_HOST_B, '#EEF4FA', false, 3)
           this.offloadPlus()
           this.offloadUnit('Flash', '卸载 15G', OFFLOAD_FLASH, '#FCF6EC', false, 3)
         }
