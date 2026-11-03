@@ -1,7 +1,7 @@
 import { hidebug } from '@kit.PerformanceAnalysisKit';
 import { batteryInfo, thermal } from '@kit.BasicServicesKit';
 import { DeviceInfoEntry, WireMessage } from '../protocol/ChatProtocol';
-import { activeModelDirs, deviceCapabilities, deviceTier, isLlamaLayout, selectModelDir } from '../llm/ModelRegistry';
+import { activeModelDirs, deviceCapabilities, deviceTier, isLlamaLayout, modelSelection, selectModelDir } from '../llm/ModelRegistry';
 import { configuredLlamaModel, loadLlamaInferenceConfig } from '../llm/LlamaSettings';
 
 // Lightweight status requests run often; multi-frame rosters are gated
@@ -31,14 +31,16 @@ export function deployedInferenceBackend(filesDir: string): string {
   return selectModelDir(filesDir, ['vision']).length > 0 ? 'qwenvl' : '';
 }
 
-/** Show every active model instead of mistaking the first deployed directory for the executing model. */
+/** Device-card display label: automatic selection is Auto; pinned engines retain their model name. */
 export function deployedModelName(filesDir: string): string {
   const llamaConfig = loadLlamaInferenceConfig(filesDir);
   if (llamaConfig !== null && configuredLlamaModel(filesDir).length > 0) {
     const name = llamaConfig.model.replace(/\.gguf$/i, '');
     return name.length > 128 ? name.substring(0, 127) + '…' : name;
   }
-  const names = activeModelDirs(filesDir).join(' / ');
+  const active = activeModelDirs(filesDir);
+  if (active.length > 0 && modelSelection(filesDir).model === '') return 'Auto';
+  const names = active.join(' / ');
   // The wire model field is a display label capped at 128 characters.
   return names.length > 128 ? names.substring(0, 127) + '…' : names;
 }
