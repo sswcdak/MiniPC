@@ -34,9 +34,9 @@ function clientHarness() {
     failSend: () => {throwSend = true;}, resumeSend: () => {throwSend = false;}};
 }
 const profile = extra => ({ready: true, readinessReason: '', promptFormat: 'loop-react-split-v1', maxPromptBytes: 4096, maxOutputTokens: 2048, maxContextTokens: 32768, modelId: 'test', modelRevision: '1', ...extra});
-async function ready(h) {
+async function ready(h,extra={}) {
   const pending = h.client.ensureReady();
-  h.receive({type: 'infer.capabilities', requestId: h.sent.at(-1).requestId, profiles: [profile()]});
+  h.receive({type: 'infer.capabilities', requestId: h.sent.at(-1).requestId, profiles: [profile(extra)]});
   assert.equal(await pending, '');
 }
 async function settled(promise) {
@@ -290,4 +290,36 @@ test('backend legacy multi-call FIFO never reuses the most recent action', async
 test('backend unknown IDs cannot consume another pending call and tool errors remain traced', async () => {
   const out = await backendRun([event('ACTION', 'read(one)', 'a'), event('ACTION', 'read(two)', 'b'), event('OBSERVATION', 'unknown', 'z'), event('ERROR', 'failed', 'b', 'read', undefined, 'failed'), event('OBSERVATION', 'A', 'a')]);
   assert.equal(out.toolCalls[0].input, ''); assert.equal(out.toolCalls[1].input, 'two'); assert.equal(out.toolCalls[2].input, 'one'); assert.equal(out.ok, false);
+});
+
+test('central queue admission keeps one wire request, no BUSY polling and no invented executor',async()=>{
+ const h=clientHarness();await ready(h,{centralQueue:true});const phases=[];
+ const result=h.client.complete('image request',{onPhase:phase=>phases.push(phase)},null,'aGVsbG8=').catch(e=>e.message);
+ const id=reqs(h)[0].requestId;
+ h.receive({type:'infer.accepted',requestId:id,state:'queued',source:'hub-queue',device:''});
+ assert.equal(h.client.routingCalls()[0].phase,'routing');assert.equal(h.client.routingCalls()[0].device,'');assert.equal(phases.at(-1),'hub-queued');
+ h.receive({type:'infer.status',requestId:'cluster',cluster:{idle:1,total:2}});
+ h.receive({type:'infer.status',requestId:id,state:'queued',source:'hub-queue',device:''});
+ assert.equal(reqs(h).length,1);assert.equal(h.client.waitingCalls.length,0);
+ h.receive({type:'infer.accepted',requestId:id,state:'queued',device:'算力设备3'});
+ assert.equal(h.client.routingCalls()[0].phase,'queued');assert.equal(h.client.routingCalls()[0].device,'算力设备3');
+ h.receive({type:'infer.accepted',requestId:id,state:'queued',source:'hub-queue',device:''});
+ assert.equal(h.client.routingCalls()[0].device,'','a BUSY reassignment clears the old executor');
+ h.client.cancel();h.receive({type:'infer.error',requestId:id,code:'CANCELLED'});assert.equal(await result,h.stopped);
+ assert.equal(reqs(h).length,1);
+});
+test('new hub accepts five concurrent requests and does not hold another owner behind a stop acknowledgement',async()=>{
+ const h=clientHarness();await ready(h,{centralQueue:true});const pending=[];
+ for(let i=0;i<5;i++)pending.push(h.client.complete('task '+i,{owner:'owner'+i}).catch(e=>e.message));
+ assert.equal(reqs(h).length,5);assert.equal(h.client.routingCalls().length,5);
+ const first=reqs(h)[0].requestId;h.client.cancelOwner('owner0');
+ const extra=h.client.complete('new task',{owner:'new'}).catch(e=>e.message);
+ assert.equal(reqs(h).length,6,'other owners can submit while one request is stopping');
+ h.receive({type:'infer.error',requestId:first,code:'CANCELLED'});h.client.cancel();
+ await Promise.all(pending);await extra;
+});
+test('BUSY from a new center is a terminal error rather than a hidden retry loop',async()=>{
+ const h=clientHarness();await ready(h,{centralQueue:true});const result=h.client.complete('task').catch(e=>e.message),id=reqs(h)[0].requestId;
+ h.receive({type:'infer.error',requestId:id,code:'BUSY',message:'unexpected BUSY',retryable:true});
+ assert.equal(await result,'unexpected BUSY');fireAll(h);assert.equal(reqs(h).length,1);assert.equal(h.client.waitingCalls.length,0);
 });

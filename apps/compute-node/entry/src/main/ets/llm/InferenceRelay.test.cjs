@@ -4,9 +4,11 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const path = require('node:path');
 const { transpile } = require('../../../../../../../tests/ets-harness.cjs');
+const timers=new Map();let timerSerial=0;
 function load(relative, requires = {}) {
   const mod = { exports: {} };
-  const context = { module: mod, exports: mod.exports, Error, Map, Math, Number, String, Promise, JSON, Array,
+  const context = { module: mod, exports: mod.exports, Error, Map, Set, Date, Math, Number, String, Promise, JSON, Array,
+    setTimeout: (fn,ms) => {timers.set(++timerSerial,{fn,ms});return timerSerial}, clearTimeout(id) {timers.delete(id)},
     require: (name) => requires[name] || {} };
   vm.runInNewContext(transpile(path.join(__dirname, relative)), context);
   return mod.exports;
@@ -38,7 +40,7 @@ function harness(initial, options = {}) {
   // Like Index.poolNodes(): a worker's in-flight count comes from the hub's own hand-off ledger.
   const snapshot = () => nodes.map((item) => item.isSelf ? item : Object.assign(item, { inflight: Math.max(item.sampled || 0, router.workerLoad(item.epoch, 0)) }));
   const relay = new InferenceRelay(router, snapshot, () => [5], { handle: (m, e) => localHandled.push([m.type, m.requestId, e]) },
-    (message, epoch) => { sent.push([json(message), epoch]); return Promise.resolve(options.sendResult !== false); }, handlers);
+    (message, epoch) => { sent.push([json(message), epoch]); return Promise.resolve(options.send ? options.send(message,epoch) : options.sendResult !== false); }, handlers, options.now || (()=>Date.now()));
   const to = (epoch, type) => sent.filter((entry) => entry[1] === epoch && (type === undefined || entry[0].type === type)).map((entry) => entry[0]);
   return { relay, router, nodes, sent, localHandled, events, to };
 }
@@ -177,9 +179,8 @@ test('a vision request is never handed to a text-only worker', () => {
   h.relay.handleFromChat({ ...request('r1'), image: '/9j/4AAQSkZJRg==' }, 5);
   assert.equal(h.to(7, 'infer.request').length, 0, 'text-only worker is not chosen for an image');
   assert.equal(h.localHandled.length, 0, 'the text-only hub does not serve it locally either');
-  const refusal = h.to(5, 'infer.error')[0];
-  assert.equal(refusal.code, 'MODEL_UNAVAILABLE');
-  assert.equal(refusal.retryable, false, 'retrying without a capable node is pointless');
+  assert.equal(h.to(5, 'infer.error').length,0);assert.equal(h.relay.pendingCount(),1);
+  assert.equal(h.to(5,'infer.accepted')[0].source,'hub-queue','wait for a future capability update at the hub');
 });
 test('a text request is not handed to a vision-only node', () => {
   const h = harness([self({ inflight: 1, capabilities: ['text'] }), worker({ capabilities: ['vision'] })]);
@@ -203,8 +204,8 @@ test('independent chat origins share a heterogeneous pool and reuse their own co
   assert.equal(h.to(5,'infer.done').length,1);assert.equal(h.to(6,'infer.done').length,0);
   assert.equal(h.router.workerLoad(7,0),0);assert.equal(h.router.workerLoad(8,0),1);
   const image='/9j/4AAQSkZJRg==';
-  h.relay.handleFromChat({...request('same-id'),image},5);
-  assert.deepEqual(h.localHandled,[['infer.request','same-id',5]],'the vision hub receives the new image request');
+  h.relay.handleFromChat({...request('next-id'),image},5);
+  assert.deepEqual(h.localHandled,[['infer.request','next-id',5]],'the vision hub receives the new image request');
   assert.equal(h.to(7,'infer.request').length,1);assert.equal(h.to(8,'infer.request').length,1,'image cannot enter either text worker');
   h.relay.handleFromWorker({type:'infer.delta',requestId:second.requestId,seq:1,text:'second answer'},8);
   h.relay.handleFromWorker({type:'infer.done',requestId:second.requestId,lastSeq:1},8);
@@ -248,9 +249,9 @@ test('parallel routing keeps idle preference, then balances busy nodes by in-fli
   assert.equal(pool.pickAvailable([self({ready:false}),worker({ready:false})]),null);
 });
 
-test('unavailable devices still return retryable refusal',()=>{
+test('unavailable devices are retained at the hub without client BUSY polling',()=>{
   const h=harness([self({ready:false}),worker({ready:false})]);h.relay.handleFromChat(request('a'),5);
-  assert.equal(h.to(5,'infer.error')[0].code,'BUSY');assert.equal(h.to(5,'infer.error')[0].retryable,true);
+  assert.equal(h.to(5,'infer.error').length,0);assert.equal(h.relay.pendingCount(),1);assert.equal(h.to(5,'infer.accepted')[0].device,'');
 });
 test('hub acknowledges admission while worker payload is still in flight, without claiming execution', () => {
   const h = harness([self({ ready: false }), worker()]);
@@ -306,20 +307,16 @@ test('cancel is forwarded under the forwardId and the CANCELLED reply returns to
 });
 test('cancel for a locally run request goes to the local host', () => {
   const h = harness([self(), worker()]);
+  h.relay.handleFromChat(request('mine'),5);h.localHandled.length=0;
   h.relay.handleFromChat({ type: 'infer.cancel', requestId: 'mine' }, 5);
   assert.deepEqual(h.localHandled, [['infer.cancel', 'mine', 5]]);
 });
-test('worker lost before accepted is retryable; after accepted it is not', () => {
-  for (const accepted of [false, true]) {
-    const h = harness([self({ ready: false }), worker()]);
-    h.relay.handleFromChat(request('r1'), 5);
-    const fid = h.to(7, 'infer.request')[0].requestId;
-    if (accepted) h.relay.handleFromWorker({ type: 'infer.accepted', requestId: fid }, 7);
-    h.relay.workerDropped(7);
-    const error = h.to(5, 'infer.error')[0];
-    assert.deepEqual([error.requestId, error.code, error.retryable], ['r1', 'WORKER_LOST', !accepted]);
-    assert.equal(h.router.getByForwardId(fid), undefined);
-  }
+test('worker loss with no replacement stays in the hub queue before or after acceptance',()=>{
+ for(const accepted of [false,true]){
+  const h=harness([self({ready:false}),worker()]);h.relay.handleFromChat(request('r1'),5);
+  const fid=h.to(7,'infer.request')[0].requestId;if(accepted)h.relay.handleFromWorker({type:'infer.accepted',requestId:fid},7);
+  h.relay.workerDropped(7);assert.equal(h.to(5,'infer.error').length,0);assert.equal(h.relay.pendingCount(),1);assert.equal(h.router.getByForwardId(fid),undefined);
+ }
 });
 test('chat drop cancels the remote work and releases the hand-off', () => {
   const h = harness([self({ inflight: 1 }), worker()]);
@@ -329,19 +326,18 @@ test('chat drop cancels the remote work and releases the hand-off', () => {
   assert.equal(h.to(7, 'infer.cancel')[0].requestId, fid);
   assert.equal(h.router.getByForwardId(fid), undefined);
 });
-test('failed forward send reports a retryable error and frees the device', async () => {
+test('failed worker and requester delivery releases all hub state', async () => {
   const h = harness([self({ inflight: 1 }), worker()], { sendResult: false });
   h.relay.handleFromChat(request('r1'), 5);
   await tick();
-  const error = h.to(5, 'infer.error')[0];
-  assert.deepEqual([error.requestId, error.code, error.retryable], ['r1', 'WORKER_LOST', true]);
+  assert.equal(h.relay.pendingCount(),0,'lost requester cannot leave queued work');assert.equal(h.relay.admissions.size,0);
   assert.equal(h.router.workerLoad(7, 0), 0);
 });
-test('duplicate live request id is refused without a second hand-off', () => {
+test('duplicate live request id is acknowledged without a second hand-off', () => {
   const h = harness([self({ inflight: 1 }), worker(), worker({ epoch: 8, label: '算力设备3' })]);
   h.relay.handleFromChat(request('r1'), 5);
   h.relay.handleFromChat(request('r1'), 5);
-  assert.equal(h.to(5, 'infer.error')[0].code, 'DUPLICATE_REQUEST');
+  assert.equal(h.to(5, 'infer.error').length,0);assert.equal(h.to(5,'infer.accepted').length,2);
   assert.equal(h.sent.filter((entry) => entry[0].type === 'infer.request').length, 1);
 });
 test('infer.status is pushed to chats only when the idle count changes', () => {
@@ -451,7 +447,7 @@ test('no re-issue after output was delivered, without a ready untried device, or
   const none = harness([self({ ready: false }), worker()]);
   none.relay.handleFromChat(request('n1'), 5);
   none.relay.workerDropped(7);
-  assert.equal(errorsToChat(none).length, 1, 'only device is gone: the failure is reported as before');
+  assert.equal(errorsToChat(none).length, 0);assert.equal(none.relay.pendingCount(),1,'replacement capacity may arrive before the original deadline');
   const many = harness([self({ memAvail: 1, inflight: 1 }), worker({ memAvail: 300 }), worker({ epoch: 8, label: 'b', memAvail: 200 }),
     worker({ epoch: 9, label: 'c', memAvail: 100 }), worker({ epoch: 10, label: 'd', memAvail: 50 })]);
   many.relay.handleFromChat(request('m1'), 5);
@@ -512,6 +508,106 @@ test('remote streaming mode and final engine telemetry survive forwarding and ta
   assert.deepEqual(h.to(5,'infer.delta')[0].metrics,first);assert.deepEqual(h.to(5,'infer.done')[0].metrics,last);
   assert.equal(h.events.filter(e=>e[0]==='metrics').length,2);
   assert.deepEqual(json(h.events.filter(e=>e[0]==='metrics').at(-1)[3]),last);
+});
+
+
+function fireQueue(h){const id=h.relay.queueTimer,timer=timers.get(id);assert(timer,'hub maintenance timer exists');timers.delete(id);timer.fn();}
+test('two text nodes receive five requests immediately and keep load balancing while busy',()=>{
+ const h=harness([self({ready:false}),worker(),worker({epoch:8,label:'算力设备3'})]);
+ for(let i=0;i<5;i++)h.relay.handleFromChat(request('five-'+i),5);
+ assert.equal(h.to(7,'infer.request').length+h.to(8,'infer.request').length,5);assert.equal(h.relay.pendingCount(),0);
+ assert.deepEqual([h.router.workerLoad(7,0),h.router.workerLoad(8,0)],[3,2]);
+});
+test('a busy image waits at the hub while later text runs; completion dispatches waiting images once in arrival order',()=>{
+ const h=harness([self({capabilities:['text']}),worker({capabilities:['vision'],sampled:1})]);
+ h.relay.handleFromChat({...request('image-1'),image:'AA=='},5);h.relay.handleFromChat({...request('image-2'),image:'AA=='},5);
+ h.relay.handleFromChat(request('text'),6);assert.equal(h.relay.pendingCount(),2);assert.equal(h.localHandled[0][1],'text');
+ const admission=h.to(5,'infer.accepted')[0];assert.equal(admission.source,'hub-queue');assert.equal(admission.device,'');
+ h.nodes[1].sampled=0;h.relay.resourcesChanged(7);let forwards=h.to(7,'infer.request');assert.equal(forwards.length,1);assert.equal(h.relay.pendingCount(),1);
+ h.relay.handleFromWorker({type:'infer.done',requestId:forwards[0].requestId},7);forwards=h.to(7,'infer.request');assert.equal(forwards.length,2);assert.equal(h.relay.pendingCount(),0);
+ assert.deepEqual(h.events.filter(e=>e[0]==='begin').map(e=>e[1]),['image-1','image-2']);
+});
+test('a capability update makes a queued request dispatchable without another client request',()=>{
+ const h=harness([self({ready:false}),worker({capabilities:['text']})]);h.relay.handleFromChat({...request('vision'),image:'AA=='},5);
+ assert.equal(h.relay.pendingCount(),1);h.nodes[1].capabilities=['vision'];h.relay.resourcesChanged(7);assert.equal(h.to(7,'infer.request').length,1);assert.equal(h.relay.pendingCount(),0);
+});
+test('FIFO scanning skips unsupported image work but does not block executable text',()=>{
+ const h=harness([self({ready:false}),worker({ready:false})]);
+ for(const [id,image] of [['i1','AA=='],['t1',''],['i2','AA=='],['t2','']])h.relay.handleFromChat({...request(id),image},5);
+ h.nodes[1].ready=true;h.relay.resourcesChanged(7);assert.equal(h.to(7,'infer.request').length,2);assert.equal(h.relay.pendingCount(),2);
+ assert.deepEqual(h.events.filter(e=>e[0]==='begin').map(e=>e[1]),['t1','t2']);
+ h.nodes.push(worker({epoch:8,capabilities:['vision']}));h.relay.resourcesChanged(8);assert.equal(h.to(8,'infer.request').length,1);
+ assert.equal(h.events.filter(e=>e[0]==='begin').at(-1)[1],'i1');
+});
+test('queue time is charged against the original execution budget, without modifying the request',()=>{
+ let now=1000;const h=harness([self({ready:false}),worker({ready:false})],{now:()=>now}),req=request('budget');
+ h.relay.handleFromChat(req,5);now+=45000;h.nodes[1].ready=true;h.relay.resourcesChanged(7);
+ assert.equal(h.to(7,'infer.request')[0].deadlineBudgetMs,120000);assert.equal(req.deadlineBudgetMs,170000);
+});
+test('queued timeout clears ownership, emits a terminal error and prevents a repeated id from running',()=>{
+ let now=1000;const h=harness([self({ready:false})],{now:()=>now});h.relay.handleFromChat(request('timeout'),5);
+ now+=120001;fireQueue(h);assert.equal(h.relay.pendingCount(),0);assert.equal(h.to(5,'infer.error')[0].code,'QUEUE_TIMEOUT');
+ h.nodes[0].ready=true;h.relay.handleFromChat(request('timeout'),5);assert.equal(h.localHandled.length,0);assert.equal(h.to(5,'infer.error').at(-1).code,'DUPLICATE_REQUEST');
+});
+test('short caller deadlines expire in the queue before an unusably small execution budget is forwarded',()=>{
+ let now=1000;const h=harness([self({ready:false})],{now:()=>now});h.relay.handleFromChat({...request('short'),deadlineBudgetMs:20000},5);
+ now+=5001;fireQueue(h);assert.equal(h.to(5,'infer.error')[0].code,'QUEUE_TIMEOUT');assert.equal(h.relay.admissions.size,0);
+});
+test('queued cancellation is scoped by origin and acknowledges stop without touching another chat',()=>{
+ const h=harness([self({ready:false})]);h.relay.handleFromChat(request('same'),5);h.relay.handleFromChat(request('same'),6);
+ h.relay.handleFromChat({type:'infer.cancel',requestId:'same'},5);assert.equal(h.relay.pendingCount(),1);assert.equal(h.to(5,'infer.error')[0].code,'CANCELLED');
+ h.nodes[0].ready=true;h.relay.resourcesChanged(0);assert.deepEqual(h.localHandled,[['infer.request','same',6]]);
+});
+test('cancel arriving before its request leaves a bounded tombstone',()=>{
+ const h=harness([self()]);h.relay.handleFromChat({type:'infer.cancel',requestId:'late'},5);h.relay.handleFromChat(request('late'),5);
+ assert.equal(h.localHandled.length,0);assert.equal(h.to(5,'infer.error').at(-1).code,'DUPLICATE_REQUEST');
+});
+test('origin disconnect clears its queue and cannot be revived by a late resource event',()=>{
+ const h=harness([self({ready:false})]);h.relay.handleFromChat(request('one'),5);h.relay.handleFromChat(request('two'),6);
+ h.relay.chatDropped(5);h.nodes[0].ready=true;h.relay.resourcesChanged(0);assert.deepEqual(h.localHandled,[['infer.request','two',6]]);
+});
+test('duplicate queued, running and completed ids never create another execution',()=>{
+ const h=harness([self({ready:false}),worker({ready:false})]);h.relay.handleFromChat(request('once'),5);h.relay.handleFromChat(request('once'),5);
+ assert.equal(h.relay.pendingCount(),1);h.nodes[1].ready=true;h.relay.resourcesChanged(7);const forwarded=h.to(7,'infer.request')[0];
+ h.relay.handleFromChat(request('once'),5);assert.equal(h.to(7,'infer.request').length,1);
+ h.relay.handleFromWorker({type:'infer.done',requestId:forwarded.requestId},7);h.relay.handleFromChat(request('once'),5);
+ assert.equal(h.to(7,'infer.request').length,1);assert.equal(h.to(5,'infer.error').at(-1).code,'DUPLICATE_REQUEST');
+});
+test('stale worker BUSY is retained at the hub and retried only after backoff or resource update',()=>{
+ const h=harness([self({ready:false}),worker()]);h.relay.handleFromChat(request('busy'),5);const first=h.to(7,'infer.request')[0];
+ h.relay.handleFromWorker({type:'infer.error',requestId:first.requestId,code:'BUSY',retryable:true},7);
+ assert.equal(h.relay.pendingCount(),1);assert.equal(h.to(5,'infer.error').length,0);assert.equal(h.to(7,'infer.request').length,1);
+ h.relay.resourcesChanged(7);assert.equal(h.to(7,'infer.request').length,2);assert.equal(h.relay.pendingCount(),0);
+});
+test('local admission BUSY follows the same hub queue and local terminal replies release ownership',async()=>{
+ const h=harness([self()]);h.relay.handleFromChat(request('self'),5);
+ await h.relay.sendLocal({type:'infer.error',requestId:'self',code:'BUSY',retryable:true},5);
+ assert.equal(h.relay.pendingCount(),1);assert.equal(h.to(5,'infer.error').length,0);
+ h.relay.resourcesChanged(0);assert.equal(h.localHandled.filter(e=>e[0]==='infer.request').length,2);
+ await h.relay.sendLocal({type:'infer.accepted',requestId:'self',device:'算力设备1',state:'preparing'},5);
+ await h.relay.sendLocal({type:'infer.done',requestId:'self'},5);assert.equal(h.relay.admissions.size,0);
+});
+test('only failed worker delivery is retried centrally, and a successful replacement keeps the origin id',async()=>{
+ const h=harness([self({ready:false}),worker(),worker({epoch:8})],{send:(m,e)=>!(e===7&&m.type==='infer.request')});
+ h.relay.handleFromChat(request('send-fail'),5);await tick();assert.equal(h.to(8,'infer.request').length,1);assert.equal(h.to(5,'infer.error').length,0);
+ assert.equal(h.router.workerLoad(7,0),0);assert.equal(h.router.workerLoad(8,0),1);
+});
+test('synchronously throwing worker sends also retain the request at the hub',async()=>{
+ const h=harness([self({ready:false}),worker()],{send:(m,e)=>{if(e===7&&m.type==='infer.request')throw new Error('radio closed');return true}});
+ h.relay.handleFromChat(request('throwing-send'),5);await tick();assert.equal(h.relay.pendingCount(),1);assert.equal(h.router.workerLoad(7,0),0);assert.equal(h.to(5,'infer.error').length,0);
+});
+test('request deadline and lost cancel acknowledgements cannot retain dispatches forever',()=>{
+ for(const cancel of [false,true]){
+  let now=1000;const h=harness([self({ready:false}),worker()],{now:()=>now});h.relay.handleFromChat({...request('active'),deadlineBudgetMs:30000},5);
+  if(cancel)h.relay.handleFromChat({type:'infer.cancel',requestId:'active'},5);
+  now+=cancel?8001:30001;fireQueue(h);assert.equal(h.relay.admissions.size,0);assert.equal(h.router.workerLoad(7,0),0);
+  assert.equal(h.to(5,'infer.error').at(-1).code,cancel?'CANCELLED':'DEADLINE_EXCEEDED');
+ }
+});
+test('queue memory is bounded and close clears every waiting request and timer',()=>{
+ const h=harness([self({ready:false})]);for(let i=0;i<129;i++)h.relay.handleFromChat(request('bounded-'+i),5);
+ assert.equal(h.relay.pendingCount(),128);assert.equal(h.to(5,'infer.error').at(-1).code,'QUEUE_FULL');
+ h.relay.close();assert.equal(h.relay.admissions.size,0);assert.equal(h.relay.queueTimer,-1);h.nodes[0].ready=true;h.relay.resourcesChanged(0);assert.equal(h.localHandled.length,0);
 });
 
 (async () => {

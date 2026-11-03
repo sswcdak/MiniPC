@@ -185,11 +185,12 @@ struct Index {
         this.finishInferTask(requestId, epoch, answer, failed);
       };
       this.inference = new InferenceHost(this.model, (message: WireMessage, epoch: number): Promise<boolean> => {
-        return this.channel.send(message, epoch);
+        return this.isComputeHub() && this.relay !== null ? this.relay.sendLocal(message, epoch) : this.channel.send(message, epoch);
       }, card);
       const host = this.inference;
       host.setDeviceProvider((): string => this.selfComputeLabel());
       const events = new RelayEvents();
+      events.waiting = (request: WireMessage, epoch: number, waiting: boolean, dispatching?: boolean): void => this.showQueuedInference(request, epoch, waiting, dispatching);
       events.phase = (id: string, epoch: number, phase: string): void => this.updateJobPhase(id, epoch, phase);
       events.metrics = (requestId: string, epoch: number, metrics: InferenceMetrics): void => {
         this.updateJobMetrics(requestId, epoch, metrics);
@@ -239,6 +240,7 @@ struct Index {
     collaborationScreen.setWanted(false);
     this.stopInfoPoll();
     this.stopMeshRetry();
+    this.relay?.close();
     this.vlTransport?.cancel();
     this.model?.close();
     this.channel.disconnect();
@@ -505,6 +507,7 @@ struct Index {
       if (peer.ready) this.replyDeviceInfo('models-' + String(Date.now()), peer.epoch);
     }
     this.rosterDeliveries.clear();
+    this.relay?.resourcesChanged(0);
     this.emitDashboard();
     return '';
   }
@@ -758,10 +761,10 @@ struct Index {
         this.flowDeliveries.delete(epoch);
         if (!this.isComputeHub()) { this.flowMirrors.clear(); this.flowVersions.clear(); }
         this.taskObserver.disconnect(epoch);
-        this.inference?.peerDropped(epoch);
         // Relay first: it owns the infer.* hand-offs that cancelDroppedPeers must not treat as chat requests.
         this.relay?.chatDropped(epoch);
         this.relay?.workerDropped(epoch);
+        this.inference?.peerDropped(epoch);
       }
       this.cancelDroppedPeers();
       this.relay?.publishLoad();
@@ -1066,6 +1069,27 @@ struct Index {
     this.emit({ kind: 'remote-start', text: question, requestId: requestId });
     this.emitDashboard();
     this.relay?.publishLoad();
+  }
+
+  /** Hub-owned waiting is visible without inventing an execution device or active native job. */
+  private showQueuedInference(request: WireMessage, epoch: number, waiting: boolean, dispatching: boolean = false): void {
+    const id = request.requestId || '', key = Index.jobKey(epoch, id);
+    if (!waiting && !dispatching) { this.queuedJobs.delete(key); this.taskLinks.delete(key); this.emitDashboard(); return; }
+    const peer = this.channel.peerInfos().find((item) => item.epoch === epoch);
+    const origin = request.origin || chatLabel(epoch, this.channel.peerInfos());
+    const input = request.prompt !== undefined ? request.prompt :
+      (request.messages || []).map((item: ChatMessage): string => '[' + item.role + ']\n' + item.content).join('\n\n');
+    this.taskLinks.set(key, { imageTask: !!request.image, taskId: request.taskId,
+      subtaskId: request.subtaskId, origin: origin, input: input });
+    if (dispatching) { this.queuedJobs.delete(key); this.emitDashboard(); return; }
+    this.jobs = this.jobs.filter((job: ActiveJob): boolean => job.key !== key || job.endedAt > 0);
+    const now = Date.now();
+    this.queuedJobs.set(key, { id: id, key: key, source: '', origin: origin, originId: peer?.deviceUid,
+      groupKey: request.taskId ? Index.jobKey(epoch, request.taskId) : undefined, subtaskId: request.subtaskId,
+      question: this.inferQuestion(input, request.label), kind: request.image ? 'image' : 'text',
+      image: this.jobImage(request.image || ''), phase: 'queued', phaseStartedAt: now,
+      answer: '', chars: 0, startedAt: now, firstAt: 0, endedAt: 0, running: true, error: false, elapsedMs: 0 });
+    this.emitDashboard();
   }
 
   private updateJobMetrics(requestId: string, epoch: number, metrics: InferenceMetrics): void {
@@ -1509,13 +1533,14 @@ struct Index {
     if (message.memUsage !== undefined || message.model !== undefined ||
       message.thermalLevel !== undefined || message.batteryTemp !== undefined ||
       message.cpuUsage !== undefined || message.modelRequests !== undefined || message.modelTier !== undefined ||
-      message.inferenceBackend !== undefined) {
+      message.inferenceBackend !== undefined || (message.capabilities !== undefined && message.capabilities.length > 0)) {
       let entry = this.peerStats.get(epoch);
       if (entry === undefined) {
         entry = { role: this.channel.peerRole(epoch) || 'compute', capabilities: [] };
       }
       applyDeviceInfo(entry, message);
       this.peerStats.set(epoch, entry);
+      this.relay?.resourcesChanged(epoch);
       if (entry.memAvail !== undefined) this.channel.setPeerMem(epoch, entry.memAvail);
       this.emitDashboard();
       this.relay?.publishLoad();

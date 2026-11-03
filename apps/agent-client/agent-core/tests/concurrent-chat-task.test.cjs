@@ -25,7 +25,8 @@ function resolve(call,answer){call.settled=true;call.d.resolve(answer);}
 (async()=>{
  const a=create('a'),b=create('b'),start=calls.length;const pa=a.run.run(),pb=b.run.run();await tick();assert.equal(calls.length-start,2,'second model call starts before first answer');
  assert.notEqual(calls[start].hooks.owner,calls[start+1].hooks.owner);calls[start].hooks.onAccepted('算力设备1');calls[start+1].hooks.onAccepted('算力设备2');
- calls[start].hooks.onPhase('queued');assert.equal(a.updates.at(-1).inferencePhase,'queued');calls[start].hooks.onPhase('prefill');assert.equal(a.updates.at(-1).inferencePhase,'prefill');calls[start].hooks.onStart();assert.equal(a.updates.at(-1).inferencePhase,'running');
+ calls[start].hooks.onPhase('queued');assert.equal(a.updates.at(-1).inferencePhase,'queued');calls[start].hooks.onPhase('prefill');assert.equal(a.updates.at(-1).inferencePhase,'prefill');calls[start].hooks.onStart();assert.equal(a.updates.at(-1).inferencePhase,'prefill','late start notification cannot regress an observed execution stage');
+ calls[start].hooks.onPhase('hub-queued');assert.equal(a.updates.at(-1).device,'');assert.equal(a.updates.at(-1).status,'中心等待分派…');calls[start].hooks.onAccepted('算力设备1');
  calls[start].hooks.onDelta('A片段');calls[start+1].hooks.onDelta('B片段');assert.equal(a.updates.at(-1).answer,'A片段');assert.equal(b.updates.at(-1).answer,'B片段');
  resolve(calls[start+1],'B完成');await pb;assert.equal(b.updates.at(-1).phase,'done');assert.equal(a.updates.at(-1).device,'算力设备1');
  a.run.cancel();await pa;assert.equal(a.updates.at(-1).phase,'cancelled');assert.ok(cancels.includes('a:main'));assert.ok(!cancels.includes('b:main'));

@@ -25,6 +25,8 @@ assert.equal(turns[0].phase,'queued');assert.equal(turns[1].phase,'failed');asse
 turns=resultTurns([message(1,'input','停止'),message(2,'status','',{phase:'cancelled'}),message(3,'answer','部分回答\n已停止生成')]);
 assert.equal(turns[0].phase,'cancelled');assert.equal(turns[0].answer,'部分回答\n已停止生成');
 assert.equal(resultTurns([]).length,0);assert.equal(resultPhaseLabel('cancelled'),'已停止');
+const waitingAtHub=resultTurns([message(20,'input','中心等待'),message(21,'status','',{phase:'running',inferencePhase:'hub-queued',startedAt:1000,endedAt:0})])[0];
+assert.equal(waitingAtHub.phase,'hub-queued');assert.equal(resultPhaseLabel(waitingAtHub.phase),'中心等待分派');assert.equal(resultIsActive(waitingAtHub.phase),true);assert.equal(resultElapsed(waitingAtHub,12000),'00:11');
 let timed=resultTurns([message(1,'input','（附图）',{imagePath:'/photo.jpg'}),message(2,'status','',{
  phase:'running',inferencePhase:'prefill',device:'算力设备2',startedAt:1000,endedAt:0})])[0];
 assert.equal(timed.phase,'prefill');assert.equal(timed.device,'算力设备2');assert.equal(resultInputLabel(timed),'图片输入');

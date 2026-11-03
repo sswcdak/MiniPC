@@ -71,6 +71,8 @@ const LIVE_COMPOSING = '正在整理工具结果…';
  * 加载权重与生成使用同一句，避免直播气泡在「正在加载模型」和「正在生成」之间切换。
  */
 function remotePhaseText(state: string): string {
+  if (state === 'hub-queued') { return '中心等待分派…'; }
+  if (state === 'sending') { return '正在发送…'; }
   if (state === 'queued') { return '排队中…'; }
   if (state === 'prefill') { return '正在理解问题…'; }
   return LIVE_PLACEHOLDER;
@@ -744,9 +746,8 @@ struct Index {
     if (this.queueDraining || !this.pageActive || this.taskClosing) { return; }
     this.queueDraining = true;
     try {
-      const load = inferenceClient.clusterLoad();
-      const capacity = Math.max(1, Math.min(16, Number.isFinite(load.total) ? Math.floor(load.total) : 1));
-      while (this.pageActive && !this.taskClosing && this.taskQueue.length > 0 && this.activeTaskSessions.length < capacity) {
+      // This list only stages ready submissions; resource admission belongs to the hub.
+      while (this.pageActive && !this.taskClosing && this.taskQueue.length > 0) {
         const task = this.taskQueue[0]; this.taskQueue = this.taskQueue.slice(1);
         if (this.sessions.some((session: TabletSession): boolean => session.id === task.sessionId)) { this.startConcurrentTask(task); }
       }

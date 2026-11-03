@@ -75,13 +75,16 @@ export class ConcurrentChatTask {
     return {
       owner: this.owner(name), taskId: this.input.id, subtaskId: subtaskId, label: label,
       onAccepted: (device: string): void => { if (this.active()) { this.state.device = device; this.publish(); } },
-      onStart: (): void => { if (this.active()) { this.state.status = '正在生成…'; this.state.inferencePhase = 'running'; this.publish(); } },
+      onStart: (): void => { if (this.active() && !this.state.inferencePhase) { this.state.status = '正在发送…'; this.state.inferencePhase = 'sending'; this.publish(); } },
       onPhase: (phase: string): void => {
         if (!this.active()) { return; }
         this.state.inferencePhase = phase;
-        this.state.status = phase === 'queued' ? '排队中…' : phase === 'prefill' ? '正在理解问题…' : '正在生成…'; this.publish();
+        if (phase === 'hub-queued' || phase === 'sending') this.state.device = '';
+        this.state.status = phase === 'sending' ? '正在发送…' : phase === 'hub-queued' ? '中心等待分派…' : phase === 'queued' ? '等待执行…' :
+          phase === 'loading' ? '正在加载模型…' : phase === 'preparing' ? '正在准备模型…' :
+          phase === 'prefill' ? '正在理解问题…' : '正在生成…'; this.publish();
       },
-      onDelta: (text: string): void => { if (this.active()) { this.state.answer = text; this.publish(); } }
+      onDelta: (text: string): void => { if (this.active()) { this.state.answer = text; this.state.inferencePhase = 'generating'; this.publish(); } }
     };
   }
   private process(event: AgentEvent): void {

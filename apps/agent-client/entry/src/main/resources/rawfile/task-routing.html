@@ -167,6 +167,7 @@ function allCalls(){return jobs.concat(remoteCalls);}
     function flowState(item){
       if(item.phase==='waiting-send')return '等待发送';
       if(item.phase==='sending')return '正在上传';
+      if(item.stage==='hub-queued')return '中心等待分派';
       if(!item.executor||item.phase==='routing')return '等待分派';
       if(item.phase==='queued')return '等待执行';
       return ({preparing:'准备模型',loading:'加载模型',prefill:'处理输入',generating:'生成中'})[item.stage]||'执行中';

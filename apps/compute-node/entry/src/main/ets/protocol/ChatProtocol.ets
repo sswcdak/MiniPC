@@ -158,6 +158,8 @@ export interface ClusterInfo {
 }
 
 export interface InferProfile {
+  /** Hub owns resource waiting; queued admission has no executor device. */
+  centralQueue?: boolean;
   modelId: string;
   modelRevision: string;
   promptFormat: string;

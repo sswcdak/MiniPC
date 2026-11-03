@@ -44,8 +44,9 @@ export struct ConversationTurnView {
         Text(this.elapsed).fontSize(11).fontColor('#6B7F79')
           .accessibilityText('本轮用时 ' + this.elapsed)
       }.width('100%')
-      Text(this.turn.answer || (this.turn.phase === 'queued' ? '等待执行…' :
-        resultIsActive(this.turn.phase) ? '正在生成…' : '暂无回答'))
+      Text(this.turn.answer || (this.turn.phase === 'hub-queued' ? '等待路由中心分派…' : this.turn.phase === 'queued' ? '等待执行…' :
+        this.turn.phase === 'sending' ? '正在发送…' : this.turn.phase === 'loading' ? '正在加载模型…' :
+        this.turn.phase === 'preparing' ? '正在准备…' : this.turn.phase === 'prefill' ? '正在理解问题…' : resultIsActive(this.turn.phase) ? '正在生成…' : '暂无回答'))
         .fontSize(15).lineHeight(27).fontColor(this.turn.phase === 'failed' ? '#C4473A' : '#16332C')
         .copyOption(CopyOptions.LocalDevice).width('100%').padding(12).backgroundColor('#F7FBFA').borderRadius(12)
       if (this.turn.process.length > 0) {

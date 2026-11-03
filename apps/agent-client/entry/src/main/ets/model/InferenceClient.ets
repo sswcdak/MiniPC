@@ -352,7 +352,7 @@ class InferenceClient {
       state.resolve = resolve;
       state.reject = reject;
     });
-    if (this.stopping.size > 0) {
+    if (this.stopping.size > 0 && this.profile.centralQueue !== true) {
       this.queued.push(state);
       return result;
     }
@@ -384,6 +384,7 @@ class InferenceClient {
   /** First dispatch of a call: fires onStart once, then sends. */
   private start(state: StreamState): void {
     state.firstStarted = Date.now();
+    state.hooks.onPhase?.('sending');
     if (!this.send(state)) {
       return;
     }
@@ -559,6 +560,7 @@ class InferenceClient {
       // readinessReason remains visible to callers instead of being flattened
       // into the unrelated version-unsupported error.
       const compatible = profiles === undefined ? [] : profiles.filter((candidate: InferProfile): boolean =>
+        (candidate.centralQueue === undefined || typeof candidate.centralQueue === 'boolean') &&
         candidate.promptFormat === 'loop-react-split-v1' &&
         Number.isInteger(candidate.maxPromptBytes) && candidate.maxPromptBytes > 0 &&
         Number.isInteger(candidate.maxOutputTokens) && candidate.maxOutputTokens > 0 &&
@@ -583,14 +585,18 @@ class InferenceClient {
       if (message.cluster !== undefined && (epoch === undefined || this.profileEpoch < 0 || epoch === this.profileEpoch)) {
         this.cluster = message.cluster;
         this.notifyLoad();
-        this.retryWaiting();
+        if (this.profile?.centralQueue !== true) this.retryWaiting();
       }
       // 请求级阶段：只派发给发起该请求的调用，用于直播气泡的阶段文案。
       // （infer.status 也被通道当作集群信息载体，那种帧没有 requestId，自然被这里忽略。）
       if (typeof message.state === 'string' && typeof message.requestId === 'string') {
         const pending = this.calls.get(message.requestId);
         if (pending !== undefined && (epoch === undefined || pending.epoch === epoch)) {
-          if (message.state === 'rerouting') {
+          if (message.source === 'hub-queue' && message.state === 'queued') {
+            pending.device = ''; pending.accepted = true;
+            this.routePhase(pending, 'routing', 'hub-queued');
+            this.arm(pending); pending.hooks.onAccepted?.(''); pending.hooks.onPhase?.('hub-queued');
+          } else if (message.state === 'rerouting') {
             // Display-only evidence from the hub's existing retry path. It never starts a retry here.
             const previous = pending.device || (message.source || '').substring(0, 128);
             const target = message.device || '';
@@ -624,18 +630,23 @@ class InferenceClient {
     if (message.type === 'infer.accepted') {
       call.accepted = true;
       // Some workers omit the device on their second acknowledgement; retain the hub's assignment.
+      if (message.source === 'hub-queue') {
+        call.device = ''; call.hooks.onAccepted?.('');
+      }
       if (message.device) {
         if (call.device !== message.device) call.phaseStartedAt = Date.now();
         call.device = message.device;
       }
       this.routePhase(call, call.device ? (message.state === 'queued' ? 'queued' : 'running') : 'routing',
-        message.state || 'running');
+        message.source === 'hub-queue' ? 'hub-queued' : message.state || 'running');
       this.arm(call);
       const accepted = call.hooks.onAccepted;
       if (accepted !== undefined && typeof message.device === 'string' && message.device.length > 0) {
         accepted(message.device);
       }
-      if (message.state === 'queued') call.hooks.onPhase?.('queued');
+      if (message.state !== undefined && ['queued', 'preparing', 'loading', 'prefill', 'generating'].includes(message.state)) {
+        call.hooks.onPhase?.(message.source === 'hub-queue' ? 'hub-queued' : message.state);
+      }
       return;
     }
     if (message.type === 'infer.delta' && typeof message.seq === 'number' && typeof message.text === 'string') {
@@ -674,7 +685,7 @@ class InferenceClient {
     if (message.type === 'infer.error') {
       // Refused before acceptance because no device was idle: nothing ran, so waiting and
       // re-issuing is safe. Anything after acceptance may have run tools and is never replayed.
-      const refused = !call.accepted && message.retryable === true &&
+      const refused = this.profile?.centralQueue !== true && !call.accepted && message.retryable === true &&
         (message.code === 'BUSY' || message.code === 'WORKER_LOST');
       if (refused && Date.now() - call.firstStarted < BUSY_WAIT_MS) {
         this.wait(call);
