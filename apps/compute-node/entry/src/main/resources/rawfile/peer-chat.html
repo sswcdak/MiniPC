@@ -832,8 +832,8 @@
     function localRunning(){return jobs.some(job=>job.running&&job.local===true);}
     function setStatus(text, connecting, isAvailable){
       const err=/失败|未发现|无法|错误|中断/.test(text||'');
-      statusView.className='status '+(connecting?'wait':(isAvailable?'ok':(err?'err':'wait')));
-      statusView.textContent=connecting?'连接中':(isAvailable?'已就绪':(text||'未连接'));
+      statusView.className='status '+(connecting?'wait':(err?'err':(isAvailable?'ok':'wait')));
+      statusView.textContent=connecting?'连接中':(err?(text||'连接失败'):(isAvailable?'已就绪':(text||'未连接')));
       statusView.title=text||'';
     }
     function setPendingImage(dataUrl){

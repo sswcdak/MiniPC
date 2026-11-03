@@ -593,8 +593,10 @@ export class LinkEnhanceChannel {
         '近场已连接（' + String(this.connectedCount()) + '台）');
       return;
     }
+    let opening: linkEnhance.Server | null = null;
     try {
       const server = linkEnhance.createServer(SERVICE);
+      opening = server;
       server.on('connectionAccepted', (incoming: linkEnhance.Connection) => {
         // 入向接入成功 = 监听健康的铁证，刷新自检计时。
         this.listenerAssertAt = Date.now();
@@ -608,6 +610,10 @@ export class LinkEnhanceChannel {
         if (this.server !== server) return;
         hilog.warn(0, 'NearbyChat', 'le-server stopped reason=%{public}d', reason);
         this.server = null;
+        // Stopping the listener does not unregister its SDK service name. Close
+        // this exact handle before retrying, otherwise createServer keeps failing
+        // with 32390203 and the manual enable button cannot recover either.
+        try { server.close(); } catch (_) {}
         // This callback cannot be caused by the user's stop: disconnect() detaches
         // this.server before calling server.stop(). Preserve the enabled intent and
         // rebuild the listener/advertisement instead of leaving the UI enabled but
@@ -639,6 +645,13 @@ export class LinkEnhanceChannel {
         SERVICE, localName, this.selfComputeSlot);
       this.update('可本机对话 · 等待聊天手机连接');
     } catch (error) {
+      // Registration can succeed before listener setup/start fails. Do not lose
+      // that handle and leave the service name occupied for the whole process.
+      if (opening !== null) {
+        if (this.server === opening) this.server = null;
+        try { opening.stop(); } catch (_) {}
+        try { opening.close(); } catch (_) {}
+      }
       // 启动失败不清除服务意图：息屏回前台时可能一次性失败（无线瞬时忙），
       // 清掉 serverWanted 会让本机服务端永久缺失，对端拨本机恒得 32390201
       // 「Peer server is not started」（真机实测）。保留意图按退避重试；

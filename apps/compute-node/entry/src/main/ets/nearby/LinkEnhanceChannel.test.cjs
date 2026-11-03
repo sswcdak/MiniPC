@@ -71,6 +71,7 @@ function build(server, tag, channelDir) {
   const logs = [];
   const bus = new Map();
   const connections = [];
+  const registeredServers = new Map();
   let lastAdvertise = null;
   let advertiseCalls = 0;
   const behavior = {
@@ -125,13 +126,25 @@ function build(server, tag, channelDir) {
         behavior.serverRefused = false;
         throw { code: 32390201 };
       }
+      if (registeredServers.has(name)) throw { code: 32390203 };
       const listeners = new Map();
       const handle = {
-        name, listeners, started: false, stopped: false,
+        name, listeners, started: false, stopped: false, closed: false,
         on: (event, fn) => listeners.set(event, fn),
-        start: () => { handle.started = true; handle.stopped = false; },
-        stop: () => { handle.stopped = true; }, close: () => {}
+        start: () => {
+          if (behavior.serverStartRefused) {
+            behavior.serverStartRefused = false;
+            throw { code: 32390300 };
+          }
+          handle.started = true; handle.stopped = false;
+        },
+        stop: () => { handle.stopped = true; },
+        close: () => {
+          handle.closed = true;
+          if (registeredServers.get(name) === handle) registeredServers.delete(name);
+        }
       };
+      registeredServers.set(name, handle);
       behavior.server = handle;
       return handle;
     }
@@ -1065,6 +1078,35 @@ function scan(t) {
     await advance(800); // SERVER_RESTART_DELAYS[0]
     assert(t.behavior.server !== undefined && t.behavior.server.started,
       'the retry brings the listener back');
+  }
+
+  // A stopped SDK server keeps its name registered until close(). Losing that
+  // handle makes every restart (including manual enable) fail with 32390203.
+  {
+    const t = build(true, 'stopped-server-releases-name');
+    await t.channel.prepare();
+    const first = t.behavior.server;
+    first.listeners.get('serverStopped')(-7);
+    assert(first.closed, 'release the stopped server name before retrying');
+    await advance(800);
+    const replacement = t.behavior.server;
+    assert(replacement !== first && replacement.started, 'restart reuses the same service name');
+    first.listeners.get('serverStopped')(-7);
+    assert(t.channel.server === replacement, 'late callbacks from the closed server leave its replacement intact');
+    t.channel.disconnect();
+    await t.channel.prepare();
+    assert(t.behavior.server !== replacement && t.behavior.server.started,
+      'manual disable and enable still work after recovery');
+  }
+  {
+    const t = build(true, 'failed-start-releases-name');
+    t.behavior.serverStartRefused = true;
+    await t.channel.prepare().catch(() => {});
+    const failed = t.behavior.server;
+    assert(failed.closed, 'a server created before start() fails must be closed');
+    await advance(800);
+    assert(t.behavior.server !== failed && t.behavior.server.started,
+      'start failure cannot poison later enable attempts with a duplicate name');
   }
 
   // --- 4d10. A deep freeze kills the system-side listener silently; the thaw

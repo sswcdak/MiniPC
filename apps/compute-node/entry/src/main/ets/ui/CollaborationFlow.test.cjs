@@ -37,3 +37,17 @@ assert.doesNotMatch(html,/class="flow-packet"|data-flow-clock/);
 event.flowCalls=[job('mirror:remote',{source:'算力设备2',kind:'image'})];h.window.onNativeEvent(event);html=h.elements.collaboration.innerHTML;
 assert.match(html,/介绍一下深圳|图片/);assert.doesNotMatch(html,/data-flow-detail="mirror:/,'mirrored minimal records must not open nonexistent local details');
 console.log('PASS: live device layout, concurrent tasks, question and image on the collaboration card, sending path, idle/online labels, clock baseline, >50 memory threshold, terminal cleanup and mirror handling');
+
+// Local inference can remain available while the nearby listener failed. That
+// must not turn a failed enable attempt into a green "ready" status.
+const nearbyFailure = '无法启动增强连接（32390203）。';
+h.window.onNativeEvent({kind:'connection',text:nearbyFailure,available:true,connecting:false,connectLabel:'启用近场'});
+assert.equal(h.elements.connection.textContent,nearbyFailure);
+assert.equal(h.elements.connection.className,'status err');
+assert.equal(h.elements.connect.disabled,false,'a failed attempt leaves enable available for retry');
+h.window.onNativeEvent({...event,text:nearbyFailure,available:true,connecting:false,connectLabel:'启用近场'});
+assert.equal(h.elements.connection.textContent,nearbyFailure,'dashboard refresh preserves the startup error');
+h.window.onNativeEvent({kind:'connection',text:'近场已连接',available:true,connecting:false,connectLabel:'停用近场'});
+assert.equal(h.elements.connection.textContent,'已就绪');
+assert.equal(h.elements.connection.className,'status ok');
+console.log('PASS: nearby startup failure remains visible while local inference is available, and successful retry clears it');
