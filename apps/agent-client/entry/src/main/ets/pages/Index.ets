@@ -51,6 +51,7 @@ import { DEFAULT_QUICK_INPUTS, loadTabletPreferences, saveTabletPreferences } fr
 import { QUICK_INPUT_LABELS } from '../model/TabletQuickInputs';
 import { ResultMessage, ResultTurn, resultTurns } from '../ui/ResultOverview';
 import { ConversationTurnView } from '../ui/ConversationTurnView';
+import { chatCharacterLabel } from '../ui/ChatTextMetrics';
 import { RemoteComputeModel } from '../model/RemoteComputeModel';
 import { ChatMode, loadChatMode, saveChatMode } from '../model/ChatModeStore';
 import { buildPlainChatPrompt } from '../model/PlainChat';
@@ -1374,6 +1375,12 @@ struct Index {
               .fontColor('#16332C').placeholderColor('#8AA39C').backgroundColor(Color.Transparent)
               .padding({ left: 4, right: 8 }).copyOption(CopyOptions.LocalDevice).enabled(!this.preparingSubmission)
               .onChange((value: string) => { this.message = value; this.saveSelectedDraft(); })
+            Column() {
+              Text(chatCharacterLabel(this.message)).fontSize(11).fontColor('#617A71')
+                .textAlign(TextAlign.End).width('100%').maxLines(1)
+                .accessibilityText('输入字数 ' + chatCharacterLabel(this.message))
+            }.width(54).height(this.composerHeight()).justifyContent(FlexAlign.End)
+              .padding({ right: 10, bottom: 8 })
           }.layoutWeight(1).height(this.composerHeight()).backgroundColor('#F7FBFA').borderRadius(12)
           Button('发送').width(52).height(44).fontSize(13).fontColor(Color.White).borderRadius(12)
             .padding(0).backgroundColor(this.canSend() ? '#0F8A74' : '#C9D4D0').enabled(this.canSend())
