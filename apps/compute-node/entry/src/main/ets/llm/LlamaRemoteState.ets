@@ -3,7 +3,7 @@ import {
   loadLlamaInferenceConfig,
   saveLlamaInferenceConfig
 } from './LlamaSettings';
-import { readyModelDirs } from './ModelRegistry';
+import { isLlamaLayout, readyModelDirs } from './ModelRegistry';
 import { llamaPeerStats, LlamaPeerTelemetry } from './LlamaPeerStatsService';
 
 interface LlamaRemoteRequest {
@@ -57,8 +57,13 @@ function validConfig(config: LlamaInferenceConfig | undefined, models: string[])
     Number.isInteger(config.port) && config.port >= 1 && config.port <= 65535;
 }
 
-export function buildLlamaRemoteState(filesDir: string, runtimeJson: string, message: string = ''): string {
-  const models = readyModelDirs(filesDir);
+function llamaModels(filesDir: string): string[] {
+  return readyModelDirs(filesDir).filter((model: string): boolean =>
+    isLlamaLayout(filesDir + '/models/' + model));
+}
+
+export function buildLlamaRemoteState(filesDir: string, runtimeJson: string, message: string = '', ok: boolean = true): string {
+  const models = llamaModels(filesDir);
   const saved = loadLlamaInferenceConfig(filesDir);
   const config = saved !== null ? saved : defaultConfig(models);
   if (saved !== null && !models.includes(saved.model)) {
@@ -74,7 +79,7 @@ export function buildLlamaRemoteState(filesDir: string, runtimeJson: string, mes
     // Keep the explicit idle state when the native probe has no JSON payload.
   }
   const state: LlamaRemoteState = {
-    ok: message.length === 0 || !message.includes('失败'),
+    ok: ok,
     message: message,
     models: models,
     config: config,
@@ -88,23 +93,23 @@ export function applyLlamaRemoteRequest(filesDir: string, runtimeJson: string, p
   try {
     const request = JSON.parse(payload) as LlamaRemoteRequest;
     if (request === null || typeof request !== 'object' || typeof request.action !== 'string') {
-      return buildLlamaRemoteState(filesDir, runtimeJson, '管理请求格式无效');
+      return buildLlamaRemoteState(filesDir, runtimeJson, '管理请求格式无效', false);
     }
     if (request.action === 'get') {
       return buildLlamaRemoteState(filesDir, runtimeJson);
     }
     if (request.action !== 'save') {
-      return buildLlamaRemoteState(filesDir, runtimeJson, '不支持的管理操作');
+      return buildLlamaRemoteState(filesDir, runtimeJson, '不支持的管理操作', false);
     }
-    const models = readyModelDirs(filesDir);
+    const models = llamaModels(filesDir);
     if (!validConfig(request.config, models)) {
-      return buildLlamaRemoteState(filesDir, runtimeJson, '推理配置校验失败');
+      return buildLlamaRemoteState(filesDir, runtimeJson, '推理配置校验失败', false);
     }
     const error = saveLlamaInferenceConfig(filesDir, request.config as LlamaInferenceConfig);
     llamaPeerStats.refreshConfig();
     return buildLlamaRemoteState(filesDir, runtimeJson,
-      error.length > 0 ? '配置保存失败: ' + error : '推理配置已保存，将在收到请求时加载模型');
+      error.length > 0 ? '配置保存失败: ' + error : '推理配置已保存，将在收到请求时加载模型', error.length === 0);
   } catch (_error) {
-    return buildLlamaRemoteState(filesDir, runtimeJson, '管理请求解析失败');
+    return buildLlamaRemoteState(filesDir, runtimeJson, '管理请求解析失败', false);
   }
 }

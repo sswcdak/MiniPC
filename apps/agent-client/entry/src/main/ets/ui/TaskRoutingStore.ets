@@ -18,7 +18,10 @@ interface RouteJob {
   question: string; kind: string; image: string; phase: string; running: boolean;
   startedAt: number; phaseStartedAt: number;
 }
-interface RoutingEvent { devices: RouteDevice[]; jobs: RouteJob[]; queuedCalls: RouteJob[]; flowCalls: RouteJob[]; }
+interface RoutingEvent {
+  devices: RouteDevice[]; jobs: RouteJob[]; queuedCalls: RouteJob[]; flowCalls: RouteJob[];
+  llamaManagerDeviceId: string;
+}
 
 function mergeDevice(previous: DeviceInfoEntry | undefined, next: DeviceInfoEntry): DeviceInfoEntry {
   return {
@@ -202,7 +205,11 @@ export class TaskRoutingStore {
         question: '', kind: notice.kind, image: '', phase: notice.phase, running: true,
         startedAt: entry.receivedAt - notice.elapsed, phaseStartedAt: entry.receivedAt - notice.elapsed });
     }
-    const event: RoutingEvent = { devices: devices, jobs: jobs, queuedCalls: queued, flowCalls: mirrors };
+    const event: RoutingEvent = {
+      devices: devices, jobs: jobs, queuedCalls: queued, flowCalls: mirrors,
+      llamaManagerDeviceId: connected && connectedHub !== null ?
+        (connectedHub.deviceUid || connectedHub.id || 'connected:' + readyEpoch) : ''
+    };
     return JSON.stringify(event);
   }
 }

@@ -29,6 +29,8 @@ assert.match(html,/class="flow-pc-mark flow-cluster-link"/);
 assert.match(html,/data-open-llama="1"/);
 h.elements.collaboration.handlers.click({target:h.target({'data-open-llama':'1'}),preventDefault(){},stopPropagation(){}});
 assert.equal(llamaManagerOpens,1,'cluster icon opens Llama management');
+h.window.onNativeEvent({...clusterEvent,devices:[{...clusterEvent.devices[0],role:'compute'}]});
+assert.doesNotMatch(h.elements.collaboration.innerHTML,/data-open-llama/,'a remote cluster must not open the local manager');
 h.window.onNativeEvent({...clusterEvent,devices:[
   {id:'single',name:'compute',role:'self',ready:true,jobs:0,memUsage:20,capabilities:['text'],inferenceBackend:'native'}]});
 html=h.elements.collaboration.innerHTML;

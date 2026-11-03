@@ -569,7 +569,11 @@ struct Index {
             '@' + String(device.slot || 0)).join(','));
       }
     }, (connected: boolean, _epoch: number): void => {
-      if (!connected) { this.routingStore.clear(); this.deviceInfoPoller.clear(); }
+      if (!connected) {
+        this.routingStore.clear(); this.deviceInfoPoller.clear();
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+      }
       if (this.pageActive) { this.refreshRoutingView(); }
       if (connected && this.llamaManagerVisible) {
         this.requestLlamaManagerState();
@@ -600,6 +604,9 @@ struct Index {
   }
 
   private openTabletLlamaManager(deviceId: string): void {
+    const hub = nearbyChannel.connectedComputeInfo();
+    const hubId = hub?.deviceUid || hub?.id || 'connected:' + nearbyChannel.readyEpoch();
+    if (!nearbyChannel.isConnected() || deviceId !== hubId) { return; }
     this.llamaManagerDeviceId = deviceId;
     this.llamaManagerVisible = true;
     this.requestLlamaManagerState();
@@ -609,6 +616,8 @@ struct Index {
   private closeTabletLlamaManager(): void {
     this.llamaManagerVisible = false;
     this.stopLlamaManagerRefresh();
+    this.llamaManagerRequestId = '';
+    this.llamaManagerRequestDeadline = 0;
   }
 
   private startLlamaManagerRefresh(): void {
@@ -638,19 +647,22 @@ struct Index {
       return;
     }
     this.llamaManagerRequestId = 'llama-manage-get-' + String(Date.now());
+    const requestId = this.llamaManagerRequestId;
     this.llamaManagerRequestDeadline = Date.now() + 2500;
     nearbyChannel.send({
       type: 'llama.manage',
       requestId: this.llamaManagerRequestId,
       text: '{"action":"get"}'
     }, epoch).then((sent: boolean): void => {
-      if (!sent) {
+      if (!sent && this.llamaManagerRequestId === requestId) {
         this.llamaManagerRequestId = '';
         this.llamaManagerRequestDeadline = 0;
       }
     }).catch((_error: Error): void => {
-      this.llamaManagerRequestId = '';
-      this.llamaManagerRequestDeadline = 0;
+      if (this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+      }
     });
   }
 
@@ -662,12 +674,24 @@ struct Index {
       return;
     }
     this.llamaManagerRequestId = 'llama-manage-save-' + String(Date.now());
+    const requestId = this.llamaManagerRequestId;
+    this.llamaManagerRequestDeadline = Date.now() + 10000;
     nearbyChannel.send({
       type: 'llama.manage',
       requestId: this.llamaManagerRequestId,
       text: '{"action":"save","config":' + configJson + '}'
-    }, epoch).catch((_error: Error): void => {
-      this.llamaManagerRequestId = '';
+    }, epoch).then((sent: boolean): void => {
+      if (!sent && this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+        this.llamaManagerStateJson = '{"ok":false,"message":"配置发送失败，请重新保存"}';
+      }
+    }).catch((_error: Error): void => {
+      if (this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+        this.llamaManagerStateJson = '{"ok":false,"message":"配置发送失败，请重新保存"}';
+      }
     });
   }
 

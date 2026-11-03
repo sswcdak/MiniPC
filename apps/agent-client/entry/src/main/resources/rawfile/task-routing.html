@@ -58,7 +58,7 @@
 <symbol id="flow-mini-pc" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m4 16-2 4h20l-2-4M9 8h6v4H9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol></defs></svg>
 <div id="viewport"><div id="space"></div><div id="stage"><section id="collaboration" class="flow-view" aria-label="设备协同运行图"></section></div></div>
 <div id="detail" hidden><button id="closeDetail">关闭</button><p id="detailText"></p></div>
-<script>let jobs=[],remoteCalls=[],devices=[],groups=[],selfLabel='算力设备1';
+<script>let jobs=[],remoteCalls=[],devices=[],groups=[],selfLabel='算力设备1',llamaManagerDeviceId='';
 function allCalls(){return jobs.concat(remoteCalls);}
     function summaryText(text){
       let value=String(text||'').replace(/^（附图）/,'').replace(/^【(?:子任务\s+\d+\/\d+|任务拆分|合并结果)】/,'');
@@ -223,8 +223,12 @@ function allCalls(){return jobs.concat(remoteCalls);}
       if(!flowView||!flowView.querySelectorAll)return;
       for(const section of flowView.querySelectorAll('.flow-compute')){
         const mark=section.querySelector('.flow-pc-mark');
-        if(!mark||!section.querySelector('use[href="#flow-cluster"]'))continue;
+        if(!mark)continue;
         const key=section.getAttribute('data-row-key')||'';
+        if(key!=='compute:'+llamaManagerDeviceId||!section.querySelector('use[href="#flow-cluster"]')){
+          for(const attr of ['data-open-llama','role','tabindex','aria-label'])mark.removeAttribute(attr);
+          continue;
+        }
         mark.setAttribute('data-open-llama',key.indexOf('compute:')===0?key.substring(8):'');
         mark.setAttribute('role','button');
         mark.setAttribute('tabindex','0');
@@ -321,7 +325,7 @@ function fitFlow(){
  stage.style.transform='scale('+scale+')';stage.style.left='0px';
  space.style.width=width+'px';space.style.height=height+'px';
 }
-window.onNativeEvent=function(event){devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
+window.onNativeEvent=function(event){llamaManagerDeviceId=event.llamaManagerDeviceId||'';devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
 window.addEventListener('resize',()=>{flowSignature='';renderFlow();fitFlow();});
 if(typeof ResizeObserver!=='undefined')new ResizeObserver(fitFlow).observe(viewport);
 flowView.addEventListener('click',event=>{

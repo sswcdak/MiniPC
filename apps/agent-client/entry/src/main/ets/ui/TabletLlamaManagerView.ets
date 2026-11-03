@@ -51,6 +51,7 @@ interface TabletLlamaConfig {
 
 interface TabletLlamaRuntime {
   state?: string;
+  distRank?: number;
   rss?: number;
   expertRam?: number;
   disk?: number;
@@ -126,6 +127,7 @@ export struct TabletLlamaManagerView {
   @State roleIsMaster: boolean = true;
   @State managerMessage: string = '正在读取算力端 Llama 配置';
   @State runtimeState: string = 'idle';
+  @State runtimeRank: number = 0;
   @State runtimeRss: number = 0;
   @State runtimeExpertRam: number = 0;
   @State runtimeDisk: number = 0;
@@ -138,9 +140,18 @@ export struct TabletLlamaManagerView {
   @State peerHit: number = -1;
   @State formDirty: boolean = false;
 
+  aboutToAppear(): void {
+    this.applyManagerState();
+  }
+
   private applyManagerState(): void {
     try {
       const state = JSON.parse(this.stateJson) as TabletLlamaState;
+      if (state.config === undefined && state.models === undefined && state.runtime === undefined &&
+        state.peer === undefined) {
+        this.managerMessage = state.message || '算力端 Llama 配置尚未同步';
+        return;
+      }
       const config = state.config;
       if (config !== undefined && !this.formDirty) {
         this.selectedModel = config.model;
@@ -162,6 +173,8 @@ export struct TabletLlamaManagerView {
       }
       const runtime = state.runtime;
       this.runtimeState = runtime?.state ?? 'idle';
+      this.runtimeRank = runtime?.distRank !== undefined && runtime.distRank >= 0 ? runtime.distRank :
+        (this.roleIsMaster ? 0 : 1);
       this.runtimeRss = runtime?.rss ?? 0;
       this.runtimeExpertRam = runtime?.expertRam ?? 0;
       this.runtimeDisk = runtime?.disk ?? 0;
@@ -186,7 +199,7 @@ export struct TabletLlamaManagerView {
     try {
       const snapshot = JSON.parse(this.eventJson) as TabletLlamaSnapshot;
       return (snapshot.devices ?? []).filter((device: TabletLlamaDevice): boolean =>
-        device.role !== 'chat' && device.pendingInfo !== true);
+        device.id === this.focusDeviceId && device.role !== 'chat' && device.pendingInfo !== true);
     } catch (_error) {
       return [];
     }
@@ -197,15 +210,12 @@ export struct TabletLlamaManagerView {
     const nodes: TabletTopologyNode[] = [];
     for (let index = 0; index < devices.length; index++) {
       const device = devices[index];
-      const slot = device.slot !== undefined && device.slot > 0 ? device.slot : index + 1;
       const isPrimary = index === 0;
-      const memoryBytes = isPrimary && this.runtimeRss > 0 ? this.runtimeRss :
-        (!isPrimary && this.peerRss > 0 ? this.peerRss :
-          (device.memTotal !== undefined && device.memUsage !== undefined ? device.memTotal * device.memUsage / 100 : 0));
+      const memoryBytes = isPrimary ? this.runtimeRss : this.peerRss;
       nodes.push({
         id: device.id,
         title: isPrimary ? '算力主节点' : '级联对端',
-        rankLabel: 'rank' + Math.max(0, slot - 1).toString(),
+        rankLabel: 'rank' + this.runtimeRank.toString(),
         address: isPrimary ? '近场连接' : (this.peerIp.length > 0 ? this.peerIp : '协同地址待同步'),
         online: device.ready || (!isPrimary && this.peerOnline),
         model: device.model && device.model.length > 0 ? device.model :
@@ -260,12 +270,6 @@ export struct TabletLlamaManagerView {
 
   private actualMemoryBytes(): number {
     const nodes = this.topologyNodes();
-    const activeNodes = nodes.filter((node: TabletTopologyNode): boolean =>
-      node.memoryBytes >= 1024 * 1024 * 1024);
-    // PP 双机等分时，任一节点短暂空闲不能把另一台的推理占用当作整个集群占用。
-    if (nodes.length >= 2 && activeNodes.length === 1) {
-      return activeNodes[0].memoryBytes * nodes.length;
-    }
     let total = 0;
     for (const node of nodes) {
       total += node.memoryBytes;
@@ -555,6 +559,11 @@ export struct TabletLlamaManagerView {
           .onClick((): void => { this.saveConfig(); })
       }
       .width('100%')
+      Text(this.managerMessage)
+        .fontSize(12)
+        .fontColor('#52665F')
+        .width('100%')
+        .accessibilityLevel('yes')
       Row() {
         Text('分布式模式').fontSize(14).fontColor('#52665F')
         Blank()

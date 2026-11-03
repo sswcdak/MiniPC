@@ -48,7 +48,7 @@ if (!renderer.includes('const spread=width/960;')) {
  renderer=renderer.replace("sourcePath(y)+'L274 '+center+targetPath(targetY.get(item.executor)).replace(/^M274 [^H]+/,'')",
   "sourcePath(y)+'L'+(232*spread+42)+' '+center+targetPath(targetY.get(item.executor)).replace(/^M[^H]+/,'')");
 }
-const setup = `let jobs=[],remoteCalls=[],devices=[],groups=[],selfLabel='算力设备1';
+const setup = `let jobs=[],remoteCalls=[],devices=[],groups=[],selfLabel='算力设备1',llamaManagerDeviceId='';
 function allCalls(){return jobs.concat(remoteCalls);}
 `;
 const adapter = `
@@ -72,13 +72,28 @@ function fitFlow(){
  stage.style.transform='scale('+scale+')';stage.style.left='0px';
  space.style.width=width+'px';space.style.height=height+'px';
 }
-window.onNativeEvent=function(event){devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
+window.onNativeEvent=function(event){llamaManagerDeviceId=event.llamaManagerDeviceId||'';devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
 window.addEventListener('resize',()=>{flowSignature='';renderFlow();fitFlow();});
 if(typeof ResizeObserver!=='undefined')new ResizeObserver(fitFlow).observe(viewport);
-flowView.addEventListener('click',event=>{const button=event.target.closest('[data-flow-detail]');if(!button)return;
+flowView.addEventListener('click',event=>{
+ const llama=event.target.closest('[data-open-llama]');
+ if(llama){
+  event.preventDefault();event.stopPropagation();
+  if(window.routingBridge&&typeof window.routingBridge.openLlamaManager==='function')
+   window.routingBridge.openLlamaManager(llama.getAttribute('data-open-llama')||'');
+  return;
+ }
+ const button=event.target.closest('[data-flow-detail]');if(!button)return;
  const job=jobs.concat(queuedCalls).find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
  document.getElementById('detailText').textContent=(job.question||'推理请求')+'\\n执行设备：'+(job.source||'等待分派')+'\\n状态：'+flowState(flowItems.find(item=>item.key===jobKey(job))||{phase:job.phase,executor:job.source,stage:job.stage});
  document.getElementById('detail').hidden=false;
+});
+flowView.addEventListener('keydown',event=>{
+ if(event.key!=='Enter'&&event.key!==' ')return;
+ const llama=event.target.closest('[data-open-llama]');if(!llama)return;
+ event.preventDefault();event.stopPropagation();
+ if(window.routingBridge&&typeof window.routingBridge.openLlamaManager==='function')
+  window.routingBridge.openLlamaManager(llama.getAttribute('data-open-llama')||'');
 });
 document.getElementById('closeDetail').addEventListener('click',()=>document.getElementById('detail').hidden=true);
 setInterval(()=>{renderFlow();fitFlow();},500);renderFlow();fitFlow();
@@ -115,6 +130,9 @@ ${css}
 @media(max-width:480px){.flow-labels{font-size:calc(13px / var(--flow-scale,1))}}
 @media(prefers-reduced-motion:reduce){.flow-compute.is-computing{animation:none}}
 ${routeStateCss}
+.flow-pc-mark[data-open-llama]{cursor:pointer;border:2px solid transparent;border-radius:12px;outline:0}
+.flow-pc-mark[data-open-llama]:hover{background:#f3f6ff;border-color:#c9d5ff}
+.flow-pc-mark[data-open-llama]:focus-visible{border-color:#3d5bdb;box-shadow:0 0 0 3px rgba(61,91,219,.18)}
 </style></head><body><svg style="position:absolute;width:0;height:0" aria-hidden="true"><defs>${symbols}</defs></svg>
 <div id="viewport"><div id="space"></div><div id="stage"><section id="collaboration" class="flow-view" aria-label="设备协同运行图"></section></div></div>
 <div id="detail" hidden><button id="closeDetail">关闭</button><p id="detailText"></p></div>
