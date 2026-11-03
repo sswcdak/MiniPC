@@ -97,7 +97,7 @@ ${css}
 .flow-compute{grid-template-columns:260px minmax(240px,1fr);gap:18px}
 .flow-compute:not(.flow-cloud){border:2px solid #D4DEEA;background:#FFFFFF;box-shadow:0 3px 10px #2449710A,0 1px 2px #24497108}
 .flow-phone{font-size:28px}.flow-phone>span{white-space:nowrap}.flow-router>span{font-size:28px}
-.flow-computer{font-size:30px;gap:8px}.flow-computer small{font-size:24px}
+.flow-computer{font-size:30px;gap:12px}.flow-computer small{font-size:24px}
 .flow-computer{min-width:0}.flow-computer>span{width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:36px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .flow-memory{width:200px}.flow-memory>i{height:18px;border-radius:9px}
 .flow-memory>span{font-size:26px;line-height:32px}.flow-memory b{font-weight:700}
