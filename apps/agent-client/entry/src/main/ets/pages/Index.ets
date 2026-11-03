@@ -48,12 +48,13 @@ import { TaskRoutingView } from '../ui/TaskRoutingView';
 import { TaskRoutingStore } from '../ui/TaskRoutingStore';
 import { DeviceInfoPoller } from '../ui/DeviceInfoPoller';
 import { DEFAULT_QUICK_INPUTS, loadTabletPreferences, saveTabletPreferences } from '../model/TabletPreferences';
+import { QUICK_INPUT_LABELS } from '../model/TabletQuickInputs';
 import { ResultMessage, ResultTurn, resultTurns } from '../ui/ResultOverview';
 import { ConversationTurnView } from '../ui/ConversationTurnView';
 import { RemoteComputeModel } from '../model/RemoteComputeModel';
 import { ChatMode, loadChatMode, saveChatMode } from '../model/ChatModeStore';
 import { buildPlainChatPrompt } from '../model/PlainChat';
-import { pickAttachment, readTextExcerpt, SavedAttachment } from '../media/ChatAttach';
+import { pickAttachment, prepareQuickInputCat, readTextExcerpt, SavedAttachment } from '../media/ChatAttach';
 import { encodeLocalImageBase64 } from '../media/ImageEncode';
 import {
   CollaborationController,
@@ -436,7 +437,42 @@ struct Index {
   }
 
   private quickInputLabel(index: number): string {
-    return '快捷输入' + (index + 1);
+    return QUICK_INPUT_LABELS[index] || '快捷输入' + (index + 1);
+  }
+
+  private composerHeight(): number {
+    return this.message.includes('\n') || this.message.length > 120 ? 110 : 44;
+  }
+
+  private async applyQuickInput(index: number): Promise<void> {
+    const text = this.quickInputs[index];
+    if (this.preparingSubmission || typeof text !== 'string' || text.trim().length === 0) return;
+    this.newSession(true);
+    this.closeSessionDrawer();
+    const sessionId = this.selectedSessionId;
+    const session = this.sessions.find((item: TabletSession): boolean => item.id === sessionId);
+    if (session === undefined) return;
+    const presentationEpoch = session.presentationEpoch;
+    session.title = this.quickInputLabel(index);
+    this.message = text;
+    this.clearAttachment(); this.attachError = '';
+    this.persistTabletSessions();
+    if (index !== 1) return;
+    this.preparingSubmission = true;
+    try {
+      const saved = await prepareQuickInputCat(this.getAbilityContext());
+      const target = this.sessions.find((item: TabletSession): boolean => item.id === sessionId);
+      if (!this.pageActive || target === undefined || target.presentationEpoch !== presentationEpoch) return;
+      target.pendingKind = saved.kind; target.pendingName = saved.name;
+      target.pendingPath = saved.relativePath; target.pendingLocal = saved.localPath;
+      if (this.selectedSessionId === sessionId) {
+        this.pendingKind = saved.kind; this.pendingName = saved.name;
+        this.pendingPath = saved.relativePath; this.pendingLocal = saved.localPath;
+      }
+      this.persistTabletSessions();
+    } catch (_error) {
+      if (this.selectedSessionId === sessionId) this.attachError = '猫图加载失败，请重试或手动添加图片。';
+    } finally { this.preparingSubmission = false; }
   }
 
   private closeSessionDrawer(): void {
@@ -1066,9 +1102,9 @@ struct Index {
       }
       Text('快捷输入').fontSize(15).fontWeight(FontWeight.Bold).fontColor('#16332C')
         .width('100%').margin({ top: 20, bottom: 6 })
-      Text('点击快捷按钮填入下方自定义文本；留空可停用该按钮。').fontSize(12).fontColor('#6B7F79').width('100%')
-      ForEach([0, 1, 2], (index: number) => {
-        Text('快捷输入 ' + (index + 1)).fontSize(13).fontColor('#16332C').width('100%').margin({ top: 12, bottom: 6 })
+      Text('点击快捷按钮会新建会话并填入文本；图片分析会附带猫图。编辑后手动发送，留空可停用按钮。').fontSize(12).fontColor('#6B7F79').width('100%')
+      ForEach([0, 1, 2, 3], (index: number) => {
+        Text(this.quickInputLabel(index)).fontSize(13).fontColor('#16332C').width('100%').margin({ top: 12, bottom: 6 })
         TextArea({ text: this.quickInputDrafts[index], placeholder: '输入自定义文本…' })
           .width('100%').height(90).maxLength(4000).fontSize(14).backgroundColor(Color.White).borderRadius(12)
           .onChange((value: string) => {
@@ -1149,11 +1185,11 @@ struct Index {
       }.layoutWeight(2).constraintSize({ minHeight: 150 }).width('100%').padding(12)
         .backgroundColor(Color.White).borderRadius(16).clip(true)
       Row({ space: 8 }) {
-        ForEach([0, 1, 2], (index: number) => {
+        ForEach([0, 1, 2, 3], (index: number) => {
           Button(this.quickInputLabel(index)).fontSize(12).height(36).fontColor('#0F8A74').backgroundColor('#E0F1EB')
-            .borderRadius(12).layoutWeight(1).enabled(this.quickInputs[index].trim().length > 0 && !this.preparingSubmission)
+            .padding({ left: 4, right: 4 }).borderRadius(12).layoutWeight(1).enabled(this.quickInputs[index].trim().length > 0 && !this.preparingSubmission)
             .accessibilityText(this.quickInputLabel(index))
-            .onClick(() => { this.message = this.quickInputs[index]; this.saveSelectedDraft(); })
+            .onClick(() => { this.applyQuickInput(index); })
         }, (index: number) => index.toString())
       }.width('100%')
       this.chatComposer()
@@ -1332,12 +1368,12 @@ struct Index {
             Button('＋').width(30).height(36).fontSize(18).fontColor('#0F8A74').backgroundColor(Color.Transparent)
               .padding(0).accessibilityText('添加附件').enabled(!this.preparingSubmission)
               .onClick(() => { this.chooseAttachment(); })
-            TextInput({ text: this.message, placeholder: '继续当前会话…' }).layoutWeight(1).height(44).fontSize(15)
+            TextArea({ text: this.message, placeholder: '继续当前会话…' }).layoutWeight(1).height(this.composerHeight()).fontSize(15)
               .focusBox({ strokeWidth: LengthMetrics.vp(0) }).border({ width: 0 })
               .fontColor('#16332C').placeholderColor('#8AA39C').backgroundColor(Color.Transparent)
               .padding({ left: 4, right: 8 }).copyOption(CopyOptions.LocalDevice).enabled(!this.preparingSubmission)
-              .onChange((value: string) => { this.message = value; this.saveSelectedDraft(); }).onSubmit(() => { this.runAgent(); })
-          }.layoutWeight(1).height(44).backgroundColor('#F7FBFA').borderRadius(12)
+              .onChange((value: string) => { this.message = value; this.saveSelectedDraft(); })
+          }.layoutWeight(1).height(this.composerHeight()).backgroundColor('#F7FBFA').borderRadius(12)
           Button('发送').width(52).height(44).fontSize(13).fontColor(Color.White).borderRadius(12)
             .padding(0).backgroundColor(this.canSend() ? '#0F8A74' : '#C9D4D0').enabled(this.canSend())
             .onClick(() => { this.runAgent(); })

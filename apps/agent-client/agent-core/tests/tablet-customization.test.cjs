@@ -3,7 +3,8 @@ const {transpile}=require('../../../../tests/ets-harness.cjs');
 function load(file,requires={}){const box={exports:{},require:name=>requires[name]||{},JSON,Array,Math,Number,Date};vm.runInNewContext(transpile(path.resolve(__dirname,'../../entry/src/main/ets/'+file)),box);return box.exports;}
 let saved,fail=false;
 const preferences={getPreferencesSync(){return {getSync:()=>saved??'{}',putSync:(key,value)=>{saved=value;},async flush(){if(fail)throw new Error('disk');}};}};
-const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences}});
+const presets=load('model/TabletQuickInputs.ets');
+const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences},'./TabletQuickInputs':presets});
 (async()=>{
  const displaySize=load('model/TabletDisplay.ets');
  assert.equal(displaySize.TABLET_WIDTH_MM,127);assert.equal(displaySize.TABLET_HEIGHT_MM,198);
@@ -25,12 +26,29 @@ const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences}}
  const pageSource=fs.readFileSync(path.resolve(__dirname,'../../entry/src/main/ets/pages/Index.ets'),'utf8');
  assert.doesNotMatch(pageSource,/TABLET_WIDTH_VP|TABLET_HEIGHT_VP|TABLET_DISPLAY_RATIO/);
  assert.match(pageSource,/this.sessionSidebar\(\)/);assert.doesNotMatch(pageSource,/this.sessionStrip\(\)/);
- let value=settings.loadTabletPreferences({});assert.equal(value.quickInputs.length,3);assert.equal(value.sidebarCollapsed,false);
+ let value=settings.loadTabletPreferences({});assert.equal(value.quickInputs.length,4);assert.equal(value.sidebarCollapsed,false);
  await settings.saveTabletPreferences({},{quickInputs:['第一行\n第二行','自定义任务',''],sidebarCollapsed:true,sidebarWidth:240});
- value=settings.loadTabletPreferences({});assert.deepEqual(Array.from(value.quickInputs),['第一行\n第二行','自定义任务','']);assert.equal(value.sidebarCollapsed,true);assert.equal(value.sidebarWidth,240);
+ value=settings.loadTabletPreferences({});assert.deepEqual(Array.from(value.quickInputs),['第一行\n第二行','自定义任务','',presets.DEFAULT_QUICK_INPUTS[3]]);assert.equal(value.sidebarCollapsed,true);assert.equal(value.sidebarWidth,240);
  value=settings.normalizeTabletPreferences({quickInputs:['x'.repeat(5000)],sidebarWidth:999});assert.equal(value.quickInputs[0].length,4000);assert.equal(value.sidebarWidth,300);
- saved='broken';assert.equal(settings.loadTabletPreferences({}).quickInputs.length,3);
+ saved='broken';assert.equal(settings.loadTabletPreferences({}).quickInputs.length,4);
+ saved=JSON.stringify({quickInputs:['总结一下当前结果','列出下一步计划','帮我分析这个问题']});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),Array.from(presets.DEFAULT_QUICK_INPUTS),'old stock prompts upgrade to four examples');
+ saved=JSON.stringify({quickInputs:['自己的任务','','帮我分析这个问题']});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),['自己的任务','',presets.DEFAULT_QUICK_INPUTS[2],presets.DEFAULT_QUICK_INPUTS[3]],'custom edits and disabled buttons survive migration');
+ await settings.saveTabletPreferences({},{quickInputs:['总结一下当前结果','','',''],sidebarWidth:200});
+ assert.equal(settings.loadTabletPreferences({}).quickInputs[0],'总结一下当前结果','explicitly edited old wording is not migrated again');
+ assert.equal(presets.QUICK_INPUT_LABELS.length,4);
  fail=true;await assert.rejects(settings.saveTabletPreferences({},value),/disk/);
+ const promptNames=['01-long-summary.txt','02-cat-analysis.txt','03-coding.txt','04-simple-qa.txt'];
+ promptNames.forEach((name,i)=>assert.equal(presets.DEFAULT_QUICK_INPUTS[i],fs.readFileSync(path.resolve(__dirname,'../../../../examples/quick-inputs',name),'utf8').trim()));
+ let written,closed=0;const attach=load('media/ChatAttach.ets',{
+  '@ohos.file.fs':{default:{OpenMode:{CREATE:1,WRITE_ONLY:2,TRUNC:4},accessSync:()=>false,mkdirSync(){},openSync:()=>({fd:10}),writeSync(_fd,data){written=Buffer.from(data);return data.byteLength},closeSync(){closed++;}}},
+  '@loop/agent-core':{ensureSandboxWorkspace(){},sandboxWorkspacePath:relative=>'/workspace/'+relative}
+ });
+ const bytes=new Uint8Array([9,1,2,3,9]).subarray(1,4);
+ const cat=await attach.prepareQuickInputCat({resourceManager:{getRawFileContent:async name=>{assert.equal(name,'quick-inputs/cat.jpg');return bytes;}}});
+ assert.deepEqual([...written],[1,2,3],'image export writes precisely the resource slice');assert.equal(closed,1);assert.equal(cat.localPath,'/workspace/uploads/quick-input-cat-v1.jpg');assert.equal(cat.kind,'image');
+ await assert.rejects(attach.prepareQuickInputCat({resourceManager:{getRawFileContent:async()=>new Uint8Array()}}),/猫图素材为空/);
  const {TaskRoutingStore}=load('ui/TaskRoutingStore.ets'),store=new TaskRoutingStore();
  const connectedHub={id:'hub',deviceUid:'hub',name:'算力设备1',role:'compute',ready:true};
  const noRoster=new TaskRoutingStore();

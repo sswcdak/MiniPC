@@ -39,10 +39,11 @@ const snapshot=store=>JSON.parse(store.snapshot([],'聊天设备1','chat',true,7
  const src=fs.readFileSync(path.resolve(__dirname,'../../entry/src/main/ets/pages/Index.ets'),'utf8').replace(/\r\n/g,'\n');
  const start=src.indexOf('  private quickInputLabel('),end=src.indexOf('\n  }',start)+4;
  const ts=require(process.env.TYPESCRIPT_PATH||'typescript'),box={exports:{}};vm.runInNewContext(ts.transpileModule('class Page {'+src.slice(start,end)+'} exports.Page=Page;', {compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,box);
- const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences:{getPreferencesSync(){return {getSync(){return JSON.stringify({routingCollapsed:true});}};}}}});
+ const presets=load('model/TabletQuickInputs.ets');
+ const settings=load('model/TabletPreferences.ets',{'./TabletQuickInputs':presets,'@kit.ArkData':{preferences:{getPreferencesSync(){return {getSync(){return JSON.stringify({routingCollapsed:true});}};}}}});
  assert.equal(settings.loadTabletPreferences({}).routingCollapsed,true);
  assert.equal(settings.normalizeTabletPreferences({quickInputs:[],sidebarWidth:200}).routingCollapsed,false,'older settings keep routing expanded');
- const p=new box.exports.Page();p.quickInputs=['任意文本','其他文本','第三段'];assert.equal(p.quickInputLabel(0),'快捷输入1');assert.equal(p.quickInputLabel(1),'快捷输入2');assert.equal(p.quickInputLabel(2),'快捷输入3');
+ box.QUICK_INPUT_LABELS=presets.QUICK_INPUT_LABELS;const p=new box.exports.Page();p.quickInputs=['任意文本','其他文本','第三段'];assert.equal(p.quickInputLabel(0),'长文本总结');assert.equal(p.quickInputLabel(1),'图片分析');assert.equal(p.quickInputLabel(2),'代码生成');assert.equal(p.quickInputLabel(3),'简单问答');
  // Querying the existing endpoint also requests a fresh complete membership list.
  const computeSource=fs.readFileSync(path.resolve(__dirname,'../../../compute-node/entry/src/main/ets/pages/Index.ets'),'utf8').replace(/\r\n/g,'\n');
  const hs=computeSource.indexOf('  private handleDeviceInfo('),he=computeSource.indexOf('\n  }',hs)+4;

@@ -1,0 +1,46 @@
+{
+  "description": "四个快捷输入示例；点击先新建会话，填入文字和附件，编辑后手动发送。",
+  "items": [
+    {
+      "id": "long-summary",
+      "label": "长文本总结",
+      "promptFile": "01-long-summary.txt",
+      "sourceFictional": true,
+      "sourceHanCharacters": 2022,
+      "sourceTotalCharacters": 2229,
+      "expectedOutput": "300～500字中文总结"
+    },
+    {
+      "id": "cat-analysis",
+      "label": "图片分析",
+      "promptFile": "02-cat-analysis.txt",
+      "attachments": [
+        "cat.jpg"
+      ],
+      "expectedOutput": "200～400字中文图片分析"
+    },
+    {
+      "id": "coding",
+      "label": "代码生成",
+      "promptFile": "03-coding.txt",
+      "expectedOutput": "index.html、style.css、app.js完整代码及运行和验证说明"
+    },
+    {
+      "id": "simple-qa",
+      "label": "简单问答",
+      "promptFile": "04-simple-qa.txt",
+      "expectedOutput": "100～200字华为公司介绍"
+    }
+  ],
+  "image": {
+    "file": "cat.jpg",
+    "width": 820,
+    "height": 820,
+    "bytes": 717025,
+    "generated": true,
+    "generator": "内置 image_gen",
+    "generationPromptFile": "cat-image-generation.txt",
+    "sourceSha256": "d32aa6421c500e118aeb5eaea5da6ff72c6aa347b6fa0b9cc5fe7fcee3a04165",
+    "compression": "JPEG, 820×820, macOS sips quality 100"
+  }
+}

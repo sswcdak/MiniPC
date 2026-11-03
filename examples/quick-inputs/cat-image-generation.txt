@@ -1,0 +1,7 @@
+Use case: photorealistic-natural
+Asset type: a reference picture for a Chinese-language image analysis quick-input demo.
+Primary request: Generate one natural-looking photo of a single orange-and-white domestic short-haired cat resting on a broad indoor windowsill. Show the whole cat clearly, including its face, upright ears, visible front paws, and curved tail. The cat is looking toward the camera with open eyes. Include just enough of the window and simple interior surroundings for a vision model to describe the environment.
+Style/medium: realistic everyday photography, authentic fur texture, anatomically correct cat.
+Composition/framing: square photo, medium view at cat eye level, clear subject, unobstructed outline.
+Lighting/mood: soft daylight from the window, calm atmosphere.
+Constraints: exactly one cat; no humans, no other animals, no text, no logos, no watermark; opaque background.
