@@ -10,6 +10,7 @@ const kits = {
 };
 // 模型发现由 llm/ModelRegistry 提供并有专项测试；这里用可变状态验证委托语义。
 let registryDirs = [];
+let selectedModel = '';
 let unionCaps = [];
 let registryTier = 0;
 let llamaConfig = null;
@@ -37,6 +38,7 @@ const context = {
     if (name === '../llm/ModelRegistry') {
       return {
         activeModelDirs: () => registryDirs.slice(),
+        modelSelection: () => ({model: selectedModel}),
         selectModelDir: (_filesDir, needs) => needs.length > 0 ? visionDir : textDir,
         isLlamaLayout: () => llamaLayout,
         deviceCapabilities: () => unionCaps.slice(),
@@ -76,16 +78,22 @@ assert.equal(reply.batteryTemp, 42.1);
 assert.equal(reply.cpuUsage, 18);
 assert.equal(reply.capabilities.join(','), 'text,vision', 'deviceInfo reply carries capabilities');
 assert.equal(formatComputeStatus(reply), 'Qwen · 内存 60% · 42.1℃ · 温热 · CPU 18% · 推理 1');
-// 委托 ModelRegistry：模型名取首个就绪目录，设备能力取并集
+// Device-card names follow automatic/manual selection; capabilities remain unchanged.
 assert.equal(deployedModelName('/app'), '', 'no ready dir means no model');
 assert.equal(deployedCapabilities('/app').join(','), '', 'no model ready means no capabilities');
 assert.equal(buildSelfEntry('/app', 0, '本机', 'self').capabilities.join(','), '');
 registryDirs = ['Qwen2.5-7B-Instruct-Q4_N_0'];
 unionCaps = ['text'];
+assert.equal(buildSelfEntry('/app', 0, '本机', 'self').model, 'Auto', 'automatic mode is explicit even with one ready model');
+selectedModel = registryDirs[0];
 assert.equal(buildSelfEntry('/app', 0, '本机', 'self').model, 'Qwen2.5-7B-Instruct-Q4_N_0');
 assert.equal(deployedCapabilities('/app').join(','), 'text');
 registryDirs = ['Qwen2.5-7B-Instruct-Q4_N_0', 'Qwen2.5-VL-7B-Q4_N_0'];
 unionCaps = ['text', 'vision'];
+selectedModel = '';
+assert.equal(deployedModelName('/app'), 'Auto', 'automatic text/image selection does not masquerade as one specific model');
+assert.equal(toDeviceInfoReply('auto', buildSelfEntry('/app', 0, '本机', 'self')).model, 'Auto', 'Auto reaches peers through deviceInfo');
+selectedModel = registryDirs[0];
 assert.equal(deployedModelName('/app'), registryDirs.join(' / '), 'display includes all active models');
 assert.equal(buildSelfEntry('/app', 0, '本机', 'self').capabilities.join(','), 'text,vision',
   'device capability is the union across deployed models');

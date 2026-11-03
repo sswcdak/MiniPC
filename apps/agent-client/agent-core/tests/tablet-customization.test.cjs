@@ -3,7 +3,8 @@ const {transpile}=require('../../../../tests/ets-harness.cjs');
 function load(file,requires={}){const box={exports:{},require:name=>requires[name]||{},JSON,Array,Math,Number,Date};vm.runInNewContext(transpile(path.resolve(__dirname,'../../entry/src/main/ets/'+file)),box);return box.exports;}
 let saved,fail=false;
 const preferences={getPreferencesSync(){return {getSync:()=>saved??'{}',putSync:(key,value)=>{saved=value;},async flush(){if(fail)throw new Error('disk');}};}};
-const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences}});
+const presets=load('model/TabletQuickInputs.ets');
+const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences},'./TabletQuickInputs':presets});
 (async()=>{
  const displaySize=load('model/TabletDisplay.ets');
  assert.equal(displaySize.TABLET_WIDTH_MM,127);assert.equal(displaySize.TABLET_HEIGHT_MM,198);
@@ -25,12 +26,59 @@ const settings=load('model/TabletPreferences.ets',{'@kit.ArkData':{preferences}}
  const pageSource=fs.readFileSync(path.resolve(__dirname,'../../entry/src/main/ets/pages/Index.ets'),'utf8');
  assert.doesNotMatch(pageSource,/TABLET_WIDTH_VP|TABLET_HEIGHT_VP|TABLET_DISPLAY_RATIO/);
  assert.match(pageSource,/this.sessionSidebar\(\)/);assert.doesNotMatch(pageSource,/this.sessionStrip\(\)/);
- let value=settings.loadTabletPreferences({});assert.equal(value.quickInputs.length,3);assert.equal(value.sidebarCollapsed,false);
+ let value=settings.loadTabletPreferences({});assert.equal(value.quickInputs.length,4);assert.equal(value.sidebarCollapsed,false);
  await settings.saveTabletPreferences({},{quickInputs:['第一行\n第二行','自定义任务',''],sidebarCollapsed:true,sidebarWidth:240});
- value=settings.loadTabletPreferences({});assert.deepEqual(Array.from(value.quickInputs),['第一行\n第二行','自定义任务','']);assert.equal(value.sidebarCollapsed,true);assert.equal(value.sidebarWidth,240);
+ value=settings.loadTabletPreferences({});assert.deepEqual(Array.from(value.quickInputs),['第一行\n第二行','自定义任务','',presets.DEFAULT_QUICK_INPUTS[3]]);assert.equal(value.sidebarCollapsed,true);assert.equal(value.sidebarWidth,240);
  value=settings.normalizeTabletPreferences({quickInputs:['x'.repeat(5000)],sidebarWidth:999});assert.equal(value.quickInputs[0].length,4000);assert.equal(value.sidebarWidth,300);
- saved='broken';assert.equal(settings.loadTabletPreferences({}).quickInputs.length,3);
+ saved='broken';assert.equal(settings.loadTabletPreferences({}).quickInputs.length,4);
+ saved=JSON.stringify({quickInputs:['总结一下当前结果','列出下一步计划','帮我分析这个问题']});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),Array.from(presets.DEFAULT_QUICK_INPUTS),'old stock prompts upgrade to four examples');
+ saved=JSON.stringify({quickInputs:['自己的任务','','帮我分析这个问题']});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),['自己的任务','',presets.DEFAULT_QUICK_INPUTS[2],presets.DEFAULT_QUICK_INPUTS[3]],'custom edits and disabled buttons survive migration');
+ const oldSimpleQa='请用100～200字介绍一下华为公司，涵盖成立时间、总部所在地、主要业务和技术领域。语言简洁、客观，适合不了解这家公司的读者。直接给出一段介绍，不使用标题、列表或宣传口号。';
+ saved=JSON.stringify({quickInputsVersion:2,quickInputs:['总结一下当前结果','','自己的任务',oldSimpleQa]});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),['总结一下当前结果','','自己的任务',presets.DEFAULT_QUICK_INPUTS[3]],'version 2 stock introduction upgrades without replacing prior custom edits');
+ for(const custom of ['请介绍其他公司','']){
+  saved=JSON.stringify({quickInputsVersion:2,quickInputs:['','','',custom]});
+  assert.equal(settings.loadTabletPreferences({}).quickInputs[3],custom,'custom or disabled introduction survives the shorter-prompt upgrade');
+ }
+ const oldCatAnalysis='请分析这张图片，用中文描述：\n1. 图中动物的种类、毛色和外观特征。\n2. 它的姿态、视线方向及身体各部分的位置。\n3. 周围环境、光线和画面构图。\n4. 两到三个容易被忽略的可见细节。\n\n请以图中实际可见的信息为依据；无法确定的内容请明确说明，不要仅凭外观推断具体品种、年龄、性别或健康状况。总字数控制在200～400字。';
+ saved=JSON.stringify({quickInputsVersion:3,quickInputs:['自己的任务',oldCatAnalysis,'',presets.DEFAULT_QUICK_INPUTS[3]]});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),['自己的任务',presets.DEFAULT_QUICK_INPUTS[1],'',presets.DEFAULT_QUICK_INPUTS[3]],'version 3 stock image prompt upgrades without replacing other edits');
+ for(const custom of ['只描述猫的毛色','']){
+  saved=JSON.stringify({quickInputsVersion:3,quickInputs:['',custom,'','']});
+  assert.equal(settings.loadTabletPreferences({}).quickInputs[1],custom,'custom or disabled image prompt survives the shorter-prompt upgrade');
+ }
+ const oldLongSummary=presets.DEFAULT_QUICK_INPUTS[0].replace('生成一份100～200字的中文总结','生成一份300～500字的中文总结');
+ for(const version of [2,3,4]){
+  saved=JSON.stringify({quickInputsVersion:version,quickInputs:[oldLongSummary,oldCatAnalysis,presets.DEFAULT_QUICK_INPUTS[2],oldSimpleQa]});
+  const upgraded=settings.loadTabletPreferences({});
+  assert.equal(upgraded.quickInputs[0],presets.DEFAULT_QUICK_INPUTS[0],'old stock long summary upgrades to 100–200 characters');
+  assert.equal(upgraded.quickInputsVersion,5);
+ }
+ for(const custom of ['请把这段文章总结成300～500字','']){
+  saved=JSON.stringify({quickInputsVersion:4,quickInputs:[custom,'','','']});
+  assert.equal(settings.loadTabletPreferences({}).quickInputs[0],custom,'custom or disabled summary survives migration');
+ }
+ saved=JSON.stringify({quickInputsVersion:5,quickInputs:[oldLongSummary,oldCatAnalysis,'',oldSimpleQa]});
+ assert.deepEqual(Array.from(settings.loadTabletPreferences({}).quickInputs),[oldLongSummary,oldCatAnalysis,'',oldSimpleQa],'edits made after upgrading are not migrated again');
+ await settings.saveTabletPreferences({},{quickInputs:['总结一下当前结果','','',''],sidebarWidth:200});
+ assert.equal(settings.loadTabletPreferences({}).quickInputs[0],'总结一下当前结果','explicitly edited old wording is not migrated again');
+ assert.equal(presets.QUICK_INPUT_LABELS.length,4);
  fail=true;await assert.rejects(settings.saveTabletPreferences({},value),/disk/);
+ const promptNames=['01-long-summary.txt','02-cat-analysis.txt','03-coding.txt','04-simple-qa.txt'];
+ promptNames.forEach((name,i)=>assert.equal(presets.DEFAULT_QUICK_INPUTS[i],fs.readFileSync(path.resolve(__dirname,'../../../../examples/quick-inputs',name),'utf8').trim()));
+ const rules={exports:{}};
+ vm.runInNewContext(transpile(path.resolve(__dirname,'../../../compute-node/entry/src/main/ets/cluster/TaskRules.ets')),rules);
+ assert.deepEqual(Array.from(presets.DEFAULT_QUICK_INPUTS,(content,i)=>rules.exports.classifyFromMessages([{role:'user',content}],i===1).tier),[2,1,2,1],'the four presets cover both tiers while image analysis retains its image requirement');
+ let written,closed=0;const attach=load('media/ChatAttach.ets',{
+  '@ohos.file.fs':{default:{OpenMode:{CREATE:1,WRITE_ONLY:2,TRUNC:4},accessSync:()=>false,mkdirSync(){},openSync:()=>({fd:10}),writeSync(_fd,data){written=Buffer.from(data);return data.byteLength},closeSync(){closed++;}}},
+  '@loop/agent-core':{ensureSandboxWorkspace(){},sandboxWorkspacePath:relative=>'/workspace/'+relative}
+ });
+ const bytes=new Uint8Array([9,1,2,3,9]).subarray(1,4);
+ const cat=await attach.prepareQuickInputCat({resourceManager:{getRawFileContent:async name=>{assert.equal(name,'quick-inputs/cat.jpg');return bytes;}}});
+ assert.deepEqual([...written],[1,2,3],'image export writes precisely the resource slice');assert.equal(closed,1);assert.equal(cat.localPath,'/workspace/uploads/quick-input-cat-v1.jpg');assert.equal(cat.kind,'image');
+ await assert.rejects(attach.prepareQuickInputCat({resourceManager:{getRawFileContent:async()=>new Uint8Array()}}),/猫图素材为空/);
  const {TaskRoutingStore}=load('ui/TaskRoutingStore.ets'),store=new TaskRoutingStore();
  const connectedHub={id:'hub',deviceUid:'hub',name:'算力设备1',role:'compute',ready:true};
  const noRoster=new TaskRoutingStore();

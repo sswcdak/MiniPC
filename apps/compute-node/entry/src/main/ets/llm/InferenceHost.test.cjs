@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const {transpile} = require('../../../../../../../tests/ets-harness.cjs');
 function load(file, imports = {}) {
-  const box = {exports: {}, Error, Map, Array, Promise, Date, ArrayBuffer, setInterval: () => 1,
+  const box = {exports: {}, Error, Map, Array, Promise, Date, ArrayBuffer, Set, setTimeout:()=>1,clearTimeout(){}, setInterval: () => 1,
     clearInterval() {}, require: name => imports[name] || {}};
   vm.runInNewContext(transpile(path.resolve(__dirname, file)), box);
   return box.exports;
@@ -53,12 +53,13 @@ function fixture(options = {}) {
     sent.push([message, epoch]);
     return options.send ? options.send(message, epoch) : Promise.resolve(true);
   };
-  const host = new InferenceHost(model, send, hooks);
+  let relay;
+  const host = new InferenceHost(model, (message,epoch)=>relay ? relay.sendLocal(message,epoch) : send(message,epoch), hooks);
   host.setDeviceProvider(() => '算力设备1');
   const router = new routerModule.ComputeRouter();
   const nodes = () => [Object.assign(new pool.PoolNode(), {epoch: 0, isSelf: true, ready: true,
     inflight: Math.max(model.activeCount(), host.activeCount()), label: '算力设备1'})];
-  const relay = new InferenceRelay(router, nodes, () => [7, 8], host, send, new RelayEvents());
+  relay = new InferenceRelay(router, nodes, () => [7, 8], host, send, new RelayEvents());
   const emit = (id, event, payload) => events.push(JSON.stringify({id: String(id), event, payload}));
   const response = (id, text) => emit(id, 'response', JSON.stringify({message: {content: text}, finish_reason: 'stop'}));
   const end = id => emit(id, 'end', 'closed');
@@ -118,10 +119,10 @@ test('disconnect cancels every request of that connection and no requests belong
   assert.equal(h.messages(8, 'c', 'infer.done').length, 1);assert.equal(h.host.activeCount(), 0);
   assert.equal(h.cards.filter(c => c[0] === 'end' && c[4] === true).length, 2);
 });
-test('duplicate local requests are refused before a second native submission, without closing the first card', () => {
+test('duplicate local requests reuse admission without a second native submission or closing the first card', () => {
   const h = fixture();h.relay.handleFromChat(request('a'), 7);h.relay.handleFromChat(request('a'), 7);
   assert.equal(h.starts.length, 1);assert.equal(h.cards.filter(c => c[0] === 'end').length, 0);
-  assert.equal(h.messages(7, 'a', 'infer.error')[0].code, 'DUPLICATE_REQUEST');assert.equal(h.host.activeCount(), 1);
+  assert.equal(h.messages(7, 'a', 'infer.error').length,0);assert.equal(h.messages(7,'a','infer.accepted').length,2);assert.equal(h.host.activeCount(), 1);
 });
 test('a native start failure releases only its request state and card', () => {
   for (const option of [{failAt: 2}, {throwAt: 2}]) {

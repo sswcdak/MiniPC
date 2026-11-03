@@ -14,6 +14,7 @@ const previous = fs.existsSync(target) ? fs.readFileSync(target, 'utf8').replace
 const hasCloudAdapter = previous.includes('.flow-cloud{');
 const cloudCss = hasCloudAdapter ? (previous.match(/^    \.flow-cloud\{.*$/m)?.[0] || '') : '';
 const pendingCss=previous.split('\n').filter(line=>/^\.flow-(compute\.is-pending|pending-note)/.test(line)).join('\n');
+const routeStateCss=previous.match(/\/\* tablet-route-state-start \*\/[\s\S]*?\/\* tablet-route-state-end \*\//)?.[0] || '';
 const css = part('    .flow-view{', '</style>') + '\n' + cloudCss + '\n' + pendingCss;
 const symbols = [...source.matchAll(/<symbol id="flow-[\s\S]*?<\/symbol>/g)].map(m=>m[0]).join('\n');
 let helpers = part('    function summaryText(', '    function focusWithoutScroll(')+
@@ -21,9 +22,6 @@ let helpers = part('    function summaryText(', '    function focusWithoutScroll
  part('    function esc(', source.includes('    function sideClass(') ? '    function sideClass(' : '    function shortModel(')+
  part('    function publicJobName(', '    function updateButton(')+
  part('    function jobKey(', '    // The rail is rebuilt');
-// Keep tablet model-name shortening and backend display rules when regenerating assets.
-const tabletDisplayName=previous.match(/    function computeDisplayName\(device\)\{[\s\S]*?\n    \}/);
-if(tabletDisplayName)helpers=helpers.replace(/    function computeDisplayName\(device\)\{[\s\S]*?\n    \}/,tabletDisplayName[0]);
 let renderer = part('    const flowView=', '    function setTaskView(');
 if (hasCloudAdapter) {
  const start=previous.indexOf('    const flowView='), end=previous.indexOf('\nconst viewport=',start);
@@ -37,8 +35,6 @@ renderer=renderer.replace('class="flow-compute" data-row-key="compute:',
  `class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:`);
 renderer=renderer.replace(/height=Math.max\(device.ready\?(?:256|304|344):(?:304|344|384),96\+Math.max\(1,active.length\)\*108\)/,
  'height=Math.max(device.ready?344:384,96+Math.max(1,active.length)*108)');
-renderer=renderer.replace("<span>'+esc(computeDisplayName(d))+'</span>",
- "<span title=\"'+esc(computeDisplayName(d))+'\">'+esc(computeDisplayName(d))+'</span>");
 renderer=renderer.replace('left=380,rowWidth=', 'left=320,rowWidth=');
 if (!renderer.includes('const spread=width/960;')) {
  renderer=renderer.replace('const width=Math.max(960,(flowView.clientWidth||1024)-44),left=320,rowWidth=width-left-18;',
@@ -52,7 +48,7 @@ if (!renderer.includes('const spread=width/960;')) {
  renderer=renderer.replace("sourcePath(y)+'L274 '+center+targetPath(targetY.get(item.executor)).replace(/^M274 [^H]+/,'')",
   "sourcePath(y)+'L'+(232*spread+42)+' '+center+targetPath(targetY.get(item.executor)).replace(/^M[^H]+/,'')");
 }
-const setup = `let jobs=[],remoteCalls=[],devices=[],groups=[],selfLabel='算力设备1';
+const setup = `let jobs=[],remoteCalls=[],devices=[],groups=[],selfLabel='算力设备1',llamaManagerDeviceId='';
 function allCalls(){return jobs.concat(remoteCalls);}
 `;
 const adapter = `
@@ -76,13 +72,28 @@ function fitFlow(){
  stage.style.transform='scale('+scale+')';stage.style.left='0px';
  space.style.width=width+'px';space.style.height=height+'px';
 }
-window.onNativeEvent=function(event){devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
+window.onNativeEvent=function(event){llamaManagerDeviceId=event.llamaManagerDeviceId||'';devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
 window.addEventListener('resize',()=>{flowSignature='';renderFlow();fitFlow();});
 if(typeof ResizeObserver!=='undefined')new ResizeObserver(fitFlow).observe(viewport);
-flowView.addEventListener('click',event=>{const button=event.target.closest('[data-flow-detail]');if(!button)return;
- const job=jobs.find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
- document.getElementById('detailText').textContent=(job.question||'推理请求')+'\\n执行设备：'+(job.source||'等待分派')+'\\n状态：'+(job.phase||'running');
+flowView.addEventListener('click',event=>{
+ const llama=event.target.closest('[data-open-llama]');
+ if(llama){
+  event.preventDefault();event.stopPropagation();
+  if(window.routingBridge&&typeof window.routingBridge.openLlamaManager==='function')
+   window.routingBridge.openLlamaManager(llama.getAttribute('data-open-llama')||'');
+  return;
+ }
+ const button=event.target.closest('[data-flow-detail]');if(!button)return;
+ const job=jobs.concat(queuedCalls).find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
+ document.getElementById('detailText').textContent=(job.question||'推理请求')+'\\n执行设备：'+(job.source||'等待分派')+'\\n状态：'+flowState(flowItems.find(item=>item.key===jobKey(job))||{phase:job.phase,executor:job.source,stage:job.stage});
  document.getElementById('detail').hidden=false;
+});
+flowView.addEventListener('keydown',event=>{
+ if(event.key!=='Enter'&&event.key!==' ')return;
+ const llama=event.target.closest('[data-open-llama]');if(!llama)return;
+ event.preventDefault();event.stopPropagation();
+ if(window.routingBridge&&typeof window.routingBridge.openLlamaManager==='function')
+  window.routingBridge.openLlamaManager(llama.getAttribute('data-open-llama')||'');
 });
 document.getElementById('closeDetail').addEventListener('click',()=>document.getElementById('detail').hidden=true);
 setInterval(()=>{renderFlow();fitFlow();},500);renderFlow();fitFlow();
@@ -101,7 +112,7 @@ ${css}
 .flow-compute{grid-template-columns:260px minmax(240px,1fr);gap:18px}
 .flow-compute:not(.flow-cloud){border:2px solid #D4DEEA;background:#FFFFFF;box-shadow:0 3px 10px #2449710A,0 1px 2px #24497108}
 .flow-phone{font-size:28px}.flow-phone>span{white-space:nowrap}.flow-router>span{font-size:28px}
-.flow-computer{font-size:30px;gap:8px}.flow-computer small{font-size:24px}
+.flow-computer{font-size:30px;gap:12px}.flow-computer small{font-size:24px}
 .flow-computer{min-width:0}.flow-computer>span{width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:36px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .flow-memory{width:200px}.flow-memory>i{height:18px;border-radius:9px}
 .flow-memory>span{font-size:26px;line-height:32px}.flow-memory b{font-weight:700}
@@ -118,6 +129,10 @@ ${css}
 @keyframes compute-breathe{0%,100%{background-color:#F8FBFF;border-color:#BDCEE4;box-shadow:0 4px 14px #3B61951A,0 1px 3px #3B61950D}50%{background-color:#EFF5FF;border-color:#A9C1E1;box-shadow:0 7px 20px #3B619526,0 2px 5px #3B619512}}
 @media(max-width:480px){.flow-labels{font-size:calc(13px / var(--flow-scale,1))}}
 @media(prefers-reduced-motion:reduce){.flow-compute.is-computing{animation:none}}
+${routeStateCss}
+.flow-pc-mark[data-open-llama]{cursor:pointer;border:2px solid transparent;border-radius:12px;outline:0}
+.flow-pc-mark[data-open-llama]:hover{background:#f3f6ff;border-color:#c9d5ff}
+.flow-pc-mark[data-open-llama]:focus-visible{border-color:#3d5bdb;box-shadow:0 0 0 3px rgba(61,91,219,.18)}
 </style></head><body><svg style="position:absolute;width:0;height:0" aria-hidden="true"><defs>${symbols}</defs></svg>
 <div id="viewport"><div id="space"></div><div id="stage"><section id="collaboration" class="flow-view" aria-label="设备协同运行图"></section></div></div>
 <div id="detail" hidden><button id="closeDetail">关闭</button><p id="detailText"></p></div>

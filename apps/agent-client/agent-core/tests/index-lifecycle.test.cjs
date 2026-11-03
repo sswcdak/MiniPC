@@ -12,7 +12,7 @@ const {transpile}=require('../../../../tests/ets-harness.cjs');
 const reporterBox={exports:{},require:name=>name==='./InferenceWire'?{utf8Bytes:s=>Buffer.from(s)}:{},Date,Math,JSON};
 vm.runInNewContext(transpile(path.resolve(__dirname,'../../entry/src/main/ets/model/TaskReporter.ets')),reporterBox);
 const source = fs.readFileSync(path.resolve(__dirname, '../../entry/src/main/ets/pages/Index.ets'), 'utf8').replace(/\r\n?/g, '\n');
-const names = ['aboutToAppear','aboutToDisappear','ensureRemoteReady','isCurrentRemoteRun','changeChatMode','changeAgentMode','beginTaskProgress','updateTaskProgress'];
+const names = ['aboutToAppear','aboutToDisappear','stopLlamaManagerRefresh','ensureRemoteReady','isCurrentRemoteRun','changeChatMode','changeAgentMode','beginTaskProgress','updateTaskProgress'];
 function method(name) {
   const startPattern = new RegExp('^  (?:private )?(?:async )?' + name + '\\(', 'm');
   // Build the literal opening parenthesis without depending on a regex escape in the transport.

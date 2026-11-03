@@ -54,7 +54,7 @@ export function resultTurns(messages: ResultMessage[]): ResultTurn[] {
     }
     current.revision += message.revision + 1;
     if (message.phase.length > 0) current.phase = message.phase;
-    if (message.phase === 'running' && ['queued', 'sending', 'prefill'].indexOf(message.inferencePhase ?? '') >= 0) {
+    if (message.phase === 'running' && ['hub-queued', 'queued', 'sending', 'preparing', 'loading', 'prefill'].indexOf(message.inferencePhase ?? '') >= 0) {
       current.phase = message.inferencePhase ?? 'running';
     }
     if (message.device !== undefined && message.device.length > 0) current.device = message.device;
@@ -84,8 +84,10 @@ export function resultSnippet(text: string, limit: number): string {
 export function resultPhaseLabel(phase: string): string {
   if (phase === 'empty') return '未开始';
   if (phase === 'preparing') return '准备中';
-  if (phase === 'queued') return '排队中';
+  if (phase === 'hub-queued') return '中心等待分派';
+  if (phase === 'queued') return '等待执行';
   if (phase === 'sending') return '发送中';
+  if (phase === 'loading') return '加载模型';
   if (phase === 'prefill') return '理解中';
   if (phase === 'running') return '推理中';
   if (phase === 'partial') return '部分完成';
@@ -95,7 +97,7 @@ export function resultPhaseLabel(phase: string): string {
 }
 
 export function resultIsActive(phase: string): boolean {
-  return ['preparing', 'queued', 'sending', 'prefill', 'running'].indexOf(phase) >= 0;
+  return ['preparing', 'hub-queued', 'queued', 'sending', 'loading', 'prefill', 'running'].indexOf(phase) >= 0;
 }
 
 export function resultInputLabel(turn: ResultTurn): string {

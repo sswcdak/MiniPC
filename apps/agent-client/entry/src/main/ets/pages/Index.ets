@@ -39,7 +39,7 @@ import {
 import { getLocalLlmBinding } from '../llm/LocalLlmBinding';
 import { nearbyChannel } from '../nearby/LinkEnhanceChannel';
 import { inferenceClient, INFERENCE_STOPPED } from '../model/InferenceClient';
-import { DeviceInfoEntry, TaskChildSnapshot, TaskSnapshot, WireMessage } from '../protocol/ChatProtocol';
+import { DeviceInfoEntry, RoutingCall, TaskChildSnapshot, TaskSnapshot, WireMessage } from '../protocol/ChatProtocol';
 import { ConcurrentChatTask, ChatTaskInput, ChatTaskUpdate } from '../model/ConcurrentChatTask';
 import { TaskConversationLedger } from '../model/TaskConversationLedger';
 import { TaskReporter } from '../model/TaskReporter';
@@ -47,13 +47,16 @@ import { TaskProgress, TaskProgressPhase, taskProgressActive } from '../model/Ta
 import { TaskRoutingView } from '../ui/TaskRoutingView';
 import { TaskRoutingStore } from '../ui/TaskRoutingStore';
 import { DeviceInfoPoller } from '../ui/DeviceInfoPoller';
+import { TabletLlamaManagerView } from '../ui/TabletLlamaManagerView';
 import { DEFAULT_QUICK_INPUTS, loadTabletPreferences, saveTabletPreferences } from '../model/TabletPreferences';
+import { QUICK_INPUT_LABELS } from '../model/TabletQuickInputs';
 import { ResultMessage, ResultTurn, resultTurns } from '../ui/ResultOverview';
 import { ConversationTurnView } from '../ui/ConversationTurnView';
+import { chatCharacterLabel } from '../ui/ChatTextMetrics';
 import { RemoteComputeModel } from '../model/RemoteComputeModel';
 import { ChatMode, loadChatMode, saveChatMode } from '../model/ChatModeStore';
 import { buildPlainChatPrompt } from '../model/PlainChat';
-import { pickAttachment, readTextExcerpt, SavedAttachment } from '../media/ChatAttach';
+import { pickAttachment, prepareQuickInputCat, readTextExcerpt, SavedAttachment } from '../media/ChatAttach';
 import { encodeLocalImageBase64 } from '../media/ImageEncode';
 import {
   CollaborationController,
@@ -70,6 +73,8 @@ const LIVE_COMPOSING = '正在整理工具结果…';
  * 加载权重与生成使用同一句，避免直播气泡在「正在加载模型」和「正在生成」之间切换。
  */
 function remotePhaseText(state: string): string {
+  if (state === 'hub-queued') { return '中心等待分派…'; }
+  if (state === 'sending') { return '正在发送…'; }
   if (state === 'queued') { return '排队中…'; }
   if (state === 'prefill') { return '正在理解问题…'; }
   return LIVE_PLACEHOLDER;
@@ -336,6 +341,9 @@ struct Index {
   @State agentEnabled: boolean = false;
   @State chatMode: ChatMode = 'chat';
   @State settingsVisible: boolean = false;
+  @State llamaManagerVisible: boolean = false;
+  @State llamaManagerDeviceId: string = '';
+  @State llamaManagerStateJson: string = '{}';
   @State modelStatus: string = '远程算力';
   @State titleText: string = '聊天';
   @State statusText: string = '正在寻找算力设备…';
@@ -399,6 +407,9 @@ struct Index {
   private parallelViews: SubtaskView[] = [];
   private stopRequested: boolean = false;
   private remoteRunGeneration: number = 0;
+  private llamaManagerRequestId: string = '';
+  private llamaManagerRequestDeadline: number = 0;
+  private llamaManagerRefreshTimer: number = -1;
   private pageActive: boolean = false;
   private chatBubbleTextWidthVp: number = 280;
   private collaborationKeepsScreenOn: boolean = false;
@@ -436,7 +447,42 @@ struct Index {
   }
 
   private quickInputLabel(index: number): string {
-    return '快捷输入' + (index + 1);
+    return QUICK_INPUT_LABELS[index] || '快捷输入' + (index + 1);
+  }
+
+  private composerHeight(): number {
+    return this.message.includes('\n') || this.message.length > 120 ? 110 : 44;
+  }
+
+  private async applyQuickInput(index: number): Promise<void> {
+    const text = this.quickInputs[index];
+    if (this.preparingSubmission || typeof text !== 'string' || text.trim().length === 0) return;
+    this.newSession(true);
+    this.closeSessionDrawer();
+    const sessionId = this.selectedSessionId;
+    const session = this.sessions.find((item: TabletSession): boolean => item.id === sessionId);
+    if (session === undefined) return;
+    const presentationEpoch = session.presentationEpoch;
+    session.title = this.quickInputLabel(index);
+    this.message = text;
+    this.clearAttachment(); this.attachError = '';
+    this.persistTabletSessions();
+    if (index !== 1) return;
+    this.preparingSubmission = true;
+    try {
+      const saved = await prepareQuickInputCat(this.getAbilityContext());
+      const target = this.sessions.find((item: TabletSession): boolean => item.id === sessionId);
+      if (!this.pageActive || target === undefined || target.presentationEpoch !== presentationEpoch) return;
+      target.pendingKind = saved.kind; target.pendingName = saved.name;
+      target.pendingPath = saved.relativePath; target.pendingLocal = saved.localPath;
+      if (this.selectedSessionId === sessionId) {
+        this.pendingKind = saved.kind; this.pendingName = saved.name;
+        this.pendingPath = saved.relativePath; this.pendingLocal = saved.localPath;
+      }
+      this.persistTabletSessions();
+    } catch (_error) {
+      if (this.selectedSessionId === sessionId) this.attachError = '猫图加载失败，请重试或手动添加图片。';
+    } finally { this.preparingSubmission = false; }
   }
 
   private closeSessionDrawer(): void {
@@ -495,6 +541,14 @@ struct Index {
     });
     nearbyChannel.subscribe((message: WireMessage, epoch: number): void => {
       if (!this.pageActive || epoch !== nearbyChannel.readyEpoch()) { return; }
+      if (message.type === 'llama.manage') {
+        if (message.requestId === this.llamaManagerRequestId) {
+          this.llamaManagerStateJson = message.text || '{}';
+          this.llamaManagerRequestId = '';
+          this.llamaManagerRequestDeadline = 0;
+        }
+        return;
+      }
       this.deviceInfoPoller.acknowledge(message, epoch);
       this.routingStore.receive(message, epoch, nearbyChannel.connectedComputeInfo());
       this.refreshRoutingView();
@@ -515,8 +569,15 @@ struct Index {
             '@' + String(device.slot || 0)).join(','));
       }
     }, (connected: boolean, _epoch: number): void => {
-      if (!connected) { this.routingStore.clear(); this.deviceInfoPoller.clear(); }
+      if (!connected) {
+        this.routingStore.clear(); this.deviceInfoPoller.clear();
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+      }
       if (this.pageActive) { this.refreshRoutingView(); }
+      if (connected && this.llamaManagerVisible) {
+        this.requestLlamaManagerState();
+      }
     });
     this.refreshRoutingView();
   }
@@ -532,10 +593,106 @@ struct Index {
     this.deviceInfoPoller.poll(this.pageActive ? nearbyChannel.readyEpoch() : -1);
     const load = inferenceClient.clusterLoad();
     const connected = nearbyChannel.isConnected();
-    const calls = inferenceClient.routingCalls();
+    const waiting = this.taskQueue.map((task: TabletQueuedTask): RoutingCall => ({
+      id: 'local-' + task.id, question: task.display, image: task.imagePayload, device: '',
+      phase: 'waiting-send', startedAt: task.submittedAt, phaseStartedAt: task.submittedAt
+    }));
+    const calls = inferenceClient.routingCalls().concat(waiting);
     this.routingJson = this.routingStore.snapshot(calls, nearbyChannel.selfLabel(),
       nearbyChannel.localUid(), connected, nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo(), load.total);
     this.clusterSummary = this.routingStore.summary(load, connected, calls);
+  }
+
+  private openTabletLlamaManager(deviceId: string): void {
+    const hub = nearbyChannel.connectedComputeInfo();
+    const hubId = hub?.deviceUid || hub?.id || 'connected:' + nearbyChannel.readyEpoch();
+    if (!nearbyChannel.isConnected() || deviceId !== hubId) { return; }
+    this.llamaManagerDeviceId = deviceId;
+    this.llamaManagerVisible = true;
+    this.requestLlamaManagerState();
+    this.startLlamaManagerRefresh();
+  }
+
+  private closeTabletLlamaManager(): void {
+    this.llamaManagerVisible = false;
+    this.stopLlamaManagerRefresh();
+    this.llamaManagerRequestId = '';
+    this.llamaManagerRequestDeadline = 0;
+  }
+
+  private startLlamaManagerRefresh(): void {
+    if (this.llamaManagerRefreshTimer >= 0) {
+      return;
+    }
+    this.llamaManagerRefreshTimer = setInterval((): void => {
+      if (this.llamaManagerVisible) {
+        this.requestLlamaManagerState();
+      }
+    }, 3000);
+  }
+
+  private stopLlamaManagerRefresh(): void {
+    if (this.llamaManagerRefreshTimer >= 0) {
+      clearInterval(this.llamaManagerRefreshTimer);
+      this.llamaManagerRefreshTimer = -1;
+    }
+  }
+
+  private requestLlamaManagerState(): void {
+    const epoch = nearbyChannel.readyEpoch();
+    if (!nearbyChannel.isConnected() || epoch < 0) {
+      return;
+    }
+    if (this.llamaManagerRequestId.length > 0 && Date.now() < this.llamaManagerRequestDeadline) {
+      return;
+    }
+    this.llamaManagerRequestId = 'llama-manage-get-' + String(Date.now());
+    const requestId = this.llamaManagerRequestId;
+    this.llamaManagerRequestDeadline = Date.now() + 2500;
+    nearbyChannel.send({
+      type: 'llama.manage',
+      requestId: this.llamaManagerRequestId,
+      text: '{"action":"get"}'
+    }, epoch).then((sent: boolean): void => {
+      if (!sent && this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+      }
+    }).catch((_error: Error): void => {
+      if (this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+      }
+    });
+  }
+
+  private saveLlamaManagerConfig(configJson: string): void {
+    const epoch = nearbyChannel.readyEpoch();
+    if (!nearbyChannel.isConnected() || epoch < 0) {
+      this.llamaManagerStateJson =
+        '{"ok":false,"message":"算力集群未连接，配置未保存","models":[],"runtime":{"state":"idle"}}';
+      return;
+    }
+    this.llamaManagerRequestId = 'llama-manage-save-' + String(Date.now());
+    const requestId = this.llamaManagerRequestId;
+    this.llamaManagerRequestDeadline = Date.now() + 10000;
+    nearbyChannel.send({
+      type: 'llama.manage',
+      requestId: this.llamaManagerRequestId,
+      text: '{"action":"save","config":' + configJson + '}'
+    }, epoch).then((sent: boolean): void => {
+      if (!sent && this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+        this.llamaManagerStateJson = '{"ok":false,"message":"配置发送失败，请重新保存"}';
+      }
+    }).catch((_error: Error): void => {
+      if (this.llamaManagerRequestId === requestId) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+        this.llamaManagerStateJson = '{"ok":false,"message":"配置发送失败，请重新保存"}';
+      }
+    });
   }
 
   private initializeTabletSessions(): void {
@@ -704,9 +861,8 @@ struct Index {
     if (this.queueDraining || !this.pageActive || this.taskClosing) { return; }
     this.queueDraining = true;
     try {
-      const load = inferenceClient.clusterLoad();
-      const capacity = Math.max(1, Math.min(16, Number.isFinite(load.total) ? Math.floor(load.total) : 1));
-      while (this.pageActive && !this.taskClosing && this.taskQueue.length > 0 && this.activeTaskSessions.length < capacity) {
+      // This list only stages ready submissions; resource admission belongs to the hub.
+      while (this.pageActive && !this.taskClosing && this.taskQueue.length > 0) {
         const task = this.taskQueue[0]; this.taskQueue = this.taskQueue.slice(1);
         if (this.sessions.some((session: TabletSession): boolean => session.id === task.sessionId)) { this.startConcurrentTask(task); }
       }
@@ -953,6 +1109,7 @@ struct Index {
 
   aboutToDisappear(): void {
     this.sessionDrawerVisible = false;
+    this.stopLlamaManagerRefresh();
     this.stopRoutingView();
     this.cancelAllConcurrentTasks();
     clearInterval(this.clusterTimer);
@@ -985,6 +1142,10 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.llamaManagerVisible) {
+      this.closeTabletLlamaManager();
+      return true;
+    }
     if (this.sessionDrawerVisible) {
       this.closeSessionDrawer();
       return true;
@@ -1001,14 +1162,25 @@ struct Index {
       Column() {
         if (this.settingsVisible) { this.settingsPage(); } else { this.chatPage(); }
       }.width('100%').height('100%')
-        .enabled(!this.sessionDrawerVisible)
-        .accessibilityLevel(this.sessionDrawerVisible ? 'no-hide-descendants' : 'auto')
+        .enabled(!this.sessionDrawerVisible && !this.llamaManagerVisible)
+        .accessibilityLevel(this.sessionDrawerVisible || this.llamaManagerVisible ? 'no-hide-descendants' : 'auto')
       if (this.sessionDrawerVisible) {
         Column().width('100%').height('100%').backgroundColor('#5711241F')
           .accessibilityText('关闭会话列表').accessibilityLevel('yes')
           .onClick(() => { this.closeSessionDrawer(); })
           .transition(TransitionEffect.OPACITY)
         this.sessionSidebar()
+      }
+      if (this.llamaManagerVisible) {
+        TabletLlamaManagerView({
+          eventJson: this.routingJson,
+          stateJson: this.llamaManagerStateJson,
+          refreshRevision: this.routingRevision,
+          focusDeviceId: this.llamaManagerDeviceId,
+          onClose: (): void => this.closeTabletLlamaManager(),
+          onRefresh: (): void => this.requestLlamaManagerState(),
+          onSaveConfig: (configJson: string): void => this.saveLlamaManagerConfig(configJson)
+        }).width('100%').height('100%')
       }
     }.width('100%').height('100%').backgroundColor('#EEF6F3')
       .onAreaChange((_old: Area, area: Area) => {
@@ -1062,9 +1234,9 @@ struct Index {
       }
       Text('快捷输入').fontSize(15).fontWeight(FontWeight.Bold).fontColor('#16332C')
         .width('100%').margin({ top: 20, bottom: 6 })
-      Text('点击快捷按钮填入下方自定义文本；留空可停用该按钮。').fontSize(12).fontColor('#6B7F79').width('100%')
-      ForEach([0, 1, 2], (index: number) => {
-        Text('快捷输入 ' + (index + 1)).fontSize(13).fontColor('#16332C').width('100%').margin({ top: 12, bottom: 6 })
+      Text('点击快捷按钮会新建会话并填入文本；图片分析会附带猫图。编辑后手动发送，留空可停用按钮。').fontSize(12).fontColor('#6B7F79').width('100%')
+      ForEach([0, 1, 2, 3], (index: number) => {
+        Text(this.quickInputLabel(index)).fontSize(13).fontColor('#16332C').width('100%').margin({ top: 12, bottom: 6 })
         TextArea({ text: this.quickInputDrafts[index], placeholder: '输入自定义文本…' })
           .width('100%').height(90).maxLength(4000).fontSize(14).backgroundColor(Color.White).borderRadius(12)
           .onChange((value: string) => {
@@ -1145,11 +1317,11 @@ struct Index {
       }.layoutWeight(2).constraintSize({ minHeight: 150 }).width('100%').padding(12)
         .backgroundColor(Color.White).borderRadius(16).clip(true)
       Row({ space: 8 }) {
-        ForEach([0, 1, 2], (index: number) => {
+        ForEach([0, 1, 2, 3], (index: number) => {
           Button(this.quickInputLabel(index)).fontSize(12).height(36).fontColor('#0F8A74').backgroundColor('#E0F1EB')
-            .borderRadius(12).layoutWeight(1).enabled(this.quickInputs[index].trim().length > 0 && !this.preparingSubmission)
+            .padding({ left: 4, right: 4 }).borderRadius(12).layoutWeight(1).enabled(this.quickInputs[index].trim().length > 0 && !this.preparingSubmission)
             .accessibilityText(this.quickInputLabel(index))
-            .onClick(() => { this.message = this.quickInputs[index]; this.saveSelectedDraft(); })
+            .onClick(() => { this.applyQuickInput(index); })
         }, (index: number) => index.toString())
       }.width('100%')
       this.chatComposer()
@@ -1249,7 +1421,11 @@ struct Index {
     } else {
       Column({ space: 8 }) {
         this.routingHeader()
-        TaskRoutingView({ eventJson: this.routingJson, refreshRevision: this.routingRevision }).width('100%').layoutWeight(1)
+        TaskRoutingView({
+          eventJson: this.routingJson,
+          refreshRevision: this.routingRevision,
+          onOpenLlamaManager: (deviceId: string): void => this.openTabletLlamaManager(deviceId)
+        }).width('100%').layoutWeight(1)
       }.width('100%').layoutWeight(5).constraintSize({ minHeight: 120 }).padding(12).backgroundColor(Color.White).borderRadius(16)
     }
   }
@@ -1328,12 +1504,18 @@ struct Index {
             Button('＋').width(30).height(36).fontSize(18).fontColor('#0F8A74').backgroundColor(Color.Transparent)
               .padding(0).accessibilityText('添加附件').enabled(!this.preparingSubmission)
               .onClick(() => { this.chooseAttachment(); })
-            TextInput({ text: this.message, placeholder: '继续当前会话…' }).layoutWeight(1).height(44).fontSize(15)
+            TextArea({ text: this.message, placeholder: '继续当前会话…' }).layoutWeight(1).height(this.composerHeight()).fontSize(15)
               .focusBox({ strokeWidth: LengthMetrics.vp(0) }).border({ width: 0 })
               .fontColor('#16332C').placeholderColor('#8AA39C').backgroundColor(Color.Transparent)
               .padding({ left: 4, right: 8 }).copyOption(CopyOptions.LocalDevice).enabled(!this.preparingSubmission)
-              .onChange((value: string) => { this.message = value; this.saveSelectedDraft(); }).onSubmit(() => { this.runAgent(); })
-          }.layoutWeight(1).height(44).backgroundColor('#F7FBFA').borderRadius(12)
+              .onChange((value: string) => { this.message = value; this.saveSelectedDraft(); })
+            Column() {
+              Text(chatCharacterLabel(this.message)).fontSize(11).fontColor('#617A71')
+                .textAlign(TextAlign.End).width('100%').maxLines(1)
+                .accessibilityText('输入字数 ' + chatCharacterLabel(this.message))
+            }.width(54).height(this.composerHeight()).justifyContent(FlexAlign.End)
+              .padding({ right: 10, bottom: 8 })
+          }.layoutWeight(1).height(this.composerHeight()).backgroundColor('#F7FBFA').borderRadius(12)
           Button('发送').width(52).height(44).fontSize(13).fontColor(Color.White).borderRadius(12)
             .padding(0).backgroundColor(this.canSend() ? '#0F8A74' : '#C9D4D0').enabled(this.canSend())
             .onClick(() => { this.runAgent(); })

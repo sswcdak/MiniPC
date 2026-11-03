@@ -53,6 +53,12 @@ export interface InferSplit {
 
 class StreamState {
   requestId: string = '';
+  displayId: string = '';
+  createdAt: number = 0;
+  phaseStartedAt: number = 0;
+  stage: string = '';
+  routeNotice: string = '';
+  routeNoticeAt: number = 0;
   prompt: string = '';
   owner: string = '';
   epoch: number = -1;
@@ -175,9 +181,11 @@ class InferenceClient {
   routingCalls(): RoutingCall[] {
     return Array.from(this.calls.values()).concat(this.waitingCalls).concat(this.queued).map((state: StreamState): RoutingCall => ({
       id: state.requestId || state.hooks.taskId || 'pending', question: state.hooks.label || '推理请求',
+      displayId: state.displayId,
       image: state.image, device: state.device,
-      phase: state.waiting || this.queued.includes(state) ? 'queued' : state.phase,
-      startedAt: state.started || Date.now()
+      phase: this.queued.includes(state) ? 'waiting-send' : state.waiting ? 'routing' : state.phase,
+      startedAt: state.createdAt || state.started || Date.now(), phaseStartedAt: state.phaseStartedAt,
+      stage: state.stage, routeNotice: state.routeNotice, routeNoticeAt: state.routeNoticeAt
     }));
   }
 
@@ -331,6 +339,9 @@ class InferenceClient {
         '/' + promptBudget.toString() + ' bytes），未发送请求，请缩小任务或文件范围'));
     }
     const state = new StreamState();
+    state.displayId = this.nextId('route');
+    state.createdAt = Date.now();
+    state.phaseStartedAt = state.createdAt;
     state.prompt = prompt;
     state.owner = hooks.owner !== undefined ? hooks.owner : '';
     state.hooks = hooks;
@@ -341,7 +352,7 @@ class InferenceClient {
       state.resolve = resolve;
       state.reject = reject;
     });
-    if (this.stopping.size > 0) {
+    if (this.stopping.size > 0 && this.profile.centralQueue !== true) {
       this.queued.push(state);
       return result;
     }
@@ -373,6 +384,7 @@ class InferenceClient {
   /** First dispatch of a call: fires onStart once, then sends. */
   private start(state: StreamState): void {
     state.firstStarted = Date.now();
+    state.hooks.onPhase?.('sending');
     if (!this.send(state)) {
       return;
     }
@@ -400,7 +412,8 @@ class InferenceClient {
     state.next = 1;
     state.text = '';
     state.accepted = false;
-    state.device = ''; state.phase = 'sending';
+    state.device = '';
+    this.routePhase(state, 'sending', '');
     state.waiting = false;
     this.calls.set(requestId, state);
     clearTimeout(state.timer);
@@ -547,6 +560,7 @@ class InferenceClient {
       // readinessReason remains visible to callers instead of being flattened
       // into the unrelated version-unsupported error.
       const compatible = profiles === undefined ? [] : profiles.filter((candidate: InferProfile): boolean =>
+        (candidate.centralQueue === undefined || typeof candidate.centralQueue === 'boolean') &&
         candidate.promptFormat === 'loop-react-split-v1' &&
         Number.isInteger(candidate.maxPromptBytes) && candidate.maxPromptBytes > 0 &&
         Number.isInteger(candidate.maxOutputTokens) && candidate.maxOutputTokens > 0 &&
@@ -571,15 +585,31 @@ class InferenceClient {
       if (message.cluster !== undefined && (epoch === undefined || this.profileEpoch < 0 || epoch === this.profileEpoch)) {
         this.cluster = message.cluster;
         this.notifyLoad();
-        this.retryWaiting();
+        if (this.profile?.centralQueue !== true) this.retryWaiting();
       }
       // 请求级阶段：只派发给发起该请求的调用，用于直播气泡的阶段文案。
       // （infer.status 也被通道当作集群信息载体，那种帧没有 requestId，自然被这里忽略。）
       if (typeof message.state === 'string' && typeof message.requestId === 'string') {
         const pending = this.calls.get(message.requestId);
         if (pending !== undefined && (epoch === undefined || pending.epoch === epoch)) {
-          pending.phase = message.state === 'queued' ? 'queued' : 'running';
-          pending.hooks.onPhase?.(message.state);
+          if (message.source === 'hub-queue' && message.state === 'queued') {
+            pending.device = ''; pending.accepted = true;
+            this.routePhase(pending, 'routing', 'hub-queued');
+            this.arm(pending); pending.hooks.onAccepted?.(''); pending.hooks.onPhase?.('hub-queued');
+          } else if (message.state === 'rerouting') {
+            // Display-only evidence from the hub's existing retry path. It never starts a retry here.
+            const previous = pending.device || (message.source || '').substring(0, 128);
+            const target = message.device || '';
+            pending.routeNotice = previous + '不可用' + (target ? '，改派' + target : '，重新分派') +
+              (message.text ? '（' + message.text.substring(0, 128) + '）' : '');
+            pending.routeNoticeAt = Date.now();
+            pending.device = '';
+            this.routePhase(pending, 'routing', '');
+          } else if (['queued', 'preparing', 'loading', 'prefill', 'generating'].includes(message.state)) {
+            this.routePhase(pending, message.state === 'queued' ? (pending.device ? 'queued' : 'routing') :
+              (pending.device ? 'running' : 'routing'), message.state);
+            pending.hooks.onPhase?.(message.state);
+          }
         }
       }
       return;
@@ -599,11 +629,23 @@ class InferenceClient {
     }
     if (message.type === 'infer.accepted') {
       call.accepted = true;
-      call.device = message.device || ''; call.phase = 'running';
+      // Some workers omit the device on their second acknowledgement; retain the hub's assignment.
+      if (message.source === 'hub-queue') {
+        call.device = ''; call.hooks.onAccepted?.('');
+      }
+      if (message.device) {
+        if (call.device !== message.device) call.phaseStartedAt = Date.now();
+        call.device = message.device;
+      }
+      this.routePhase(call, call.device ? (message.state === 'queued' ? 'queued' : 'running') : 'routing',
+        message.source === 'hub-queue' ? 'hub-queued' : message.state || 'running');
       this.arm(call);
       const accepted = call.hooks.onAccepted;
       if (accepted !== undefined && typeof message.device === 'string' && message.device.length > 0) {
         accepted(message.device);
+      }
+      if (message.state !== undefined && ['queued', 'preparing', 'loading', 'prefill', 'generating'].includes(message.state)) {
+        call.hooks.onPhase?.(message.source === 'hub-queue' ? 'hub-queued' : message.state);
       }
       return;
     }
@@ -615,6 +657,7 @@ class InferenceClient {
       }
       call.text += message.text;
       call.next += 1;
+      this.routePhase(call, call.device ? 'running' : 'routing', 'generating');
       this.arm(call);
       const preview = call.hooks.onDelta;
       const shown = repairUtf8FromSource(call.text, call.prompt);
@@ -642,7 +685,7 @@ class InferenceClient {
     if (message.type === 'infer.error') {
       // Refused before acceptance because no device was idle: nothing ran, so waiting and
       // re-issuing is safe. Anything after acceptance may have run tools and is never replayed.
-      const refused = !call.accepted && message.retryable === true &&
+      const refused = this.profile?.centralQueue !== true && !call.accepted && message.retryable === true &&
         (message.code === 'BUSY' || message.code === 'WORKER_LOST');
       if (refused && Date.now() - call.firstStarted < BUSY_WAIT_MS) {
         this.wait(call);
@@ -659,10 +702,18 @@ class InferenceClient {
     }
   }
 
+  private routePhase(state: StreamState, phase: string, stage: string): void {
+    if (state.phase !== phase || state.stage !== stage) state.phaseStartedAt = Date.now();
+    state.phase = phase;
+    state.stage = stage;
+  }
+
   /** Parks a refused request; it is re-sent on the next idle report or after RETRY_INTERVAL_MS. */
   private wait(state: StreamState): void {
     clearTimeout(state.timer);
     state.waiting = true;
+    state.device = '';
+    this.routePhase(state, 'routing', '');
     if (state.queuedSince === 0) state.queuedSince = Date.now();
     this.calls.delete(state.requestId);
     clearTimeout(state.retryTimer);

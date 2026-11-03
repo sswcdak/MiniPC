@@ -2,7 +2,9 @@ import { ClusterInfo, DeviceInfoEntry, RoutingCall, WireMessage } from '../proto
 
 interface RouteDevice {
   id: string; name: string; role: string; ready: boolean; jobs: number;
-  model?: string; inferenceBackend?: string; memUsage?: number; capabilities?: string[]; pendingInfo?: boolean;
+  slot?: number; model?: string; inferenceBackend?: string; memTotal?: number; memAvail?: number;
+  memUsage?: number; cpuUsage?: number;
+  thermalLevel?: number; batteryTemp?: number; capabilities?: string[]; pendingInfo?: boolean;
 }
 interface FlowNotice {
   key: string; revision: number; kind: string; phase: string; source: string; origin: string;
@@ -11,11 +13,15 @@ interface FlowNotice {
 interface FlowEntry { notice: FlowNotice; receivedAt: number; }
 interface RouteJob {
   executorId?: string; executionBackend?: string; executionModel?: string;
+  ingressId?: string; ingress?: string; stage?: string; routeNotice?: string; routeNoticeAt?: number;
   id: string; key: string; source: string; origin: string; originId: string;
   question: string; kind: string; image: string; phase: string; running: boolean;
   startedAt: number; phaseStartedAt: number;
 }
-interface RoutingEvent { devices: RouteDevice[]; jobs: RouteJob[]; queuedCalls: RouteJob[]; flowCalls: RouteJob[]; }
+interface RoutingEvent {
+  devices: RouteDevice[]; jobs: RouteJob[]; queuedCalls: RouteJob[]; flowCalls: RouteJob[];
+  llamaManagerDeviceId: string;
+}
 
 function mergeDevice(previous: DeviceInfoEntry | undefined, next: DeviceInfoEntry): DeviceInfoEntry {
   return {
@@ -130,7 +136,10 @@ export class TaskRoutingStore {
       id: device.deviceUid || device.id || 'roster-' + index, name: device.slot !== undefined && device.slot > 0 ?
         (device.role === 'chat' ? '聊天设备' : '算力设备') + device.slot : (device.name || (device.role === 'chat' ? '聊天设备' : '算力设备')),
       role: device.role === 'chat' ? 'chat' : 'compute', ready: device.ready !== false,
-      jobs: device.modelRequests ?? 0, model: device.model, inferenceBackend: device.inferenceBackend, memUsage: device.memUsage,
+      jobs: device.modelRequests ?? 0, slot: device.slot, model: device.model, inferenceBackend: device.inferenceBackend,
+      memTotal: device.memTotal, memAvail: device.memAvail, memUsage: device.memUsage,
+      cpuUsage: device.cpuUsage, thermalLevel: device.thermalLevel,
+      batteryTemp: device.batteryTemp,
       capabilities: device.capabilities
     }));
     // A completed handshake is enough to show the connected hub. Older compute builds
@@ -153,22 +162,26 @@ export class TaskRoutingStore {
       }
       // An accepted public device label is evidence even before the first roster arrives.
       if (call.device.length > 0 && !devices.some((device: RouteDevice): boolean => device.name === call.device)) {
-        devices.push({ id: 'accepted:' + call.device, name: call.device, role: 'compute', ready: true, jobs: 1 });
+        devices.push({ id: 'accepted:' + call.device, name: call.device, role: 'compute', ready: true,
+          jobs: call.phase === 'running' ? 1 : 0 });
       }
-      const job: RouteJob = { id: call.id, key: 'client:' + call.id,
-        source: call.device || (call.phase === 'sending' && connectedHub !== null ? connectedHub.name || '算力设备' : ''),
+      const job: RouteJob = { id: call.id, key: 'client:' + (call.displayId || call.id),
+        source: call.device, ingressId: connectedHub?.deviceUid || connectedHub?.id,
+        ingress: connectedHub?.name, stage: call.stage, routeNotice: call.routeNotice, routeNoticeAt: call.routeNoticeAt,
         origin: selfLabel, originId: selfUid, question: call.question, kind: call.image.length > 0 ? 'image' : 'text',
         image: call.image.length > 0 ? 'data:image/jpeg;base64,' + call.image : '', phase: call.phase,
-        running: call.phase !== 'queued', startedAt: call.startedAt, phaseStartedAt: call.startedAt };
+        running: call.phase !== 'queued' && call.phase !== 'waiting-send',
+        startedAt: call.startedAt, phaseStartedAt: call.phaseStartedAt || call.startedAt };
       const evidence = Array.from(this.flows.values()).find((entry: FlowEntry): boolean =>
         (entry.notice.originId === selfUid || (!entry.notice.originId && entry.notice.origin === selfLabel)) &&
         entry.notice.key.includes(':' + call.id + ':'));
-      if (evidence !== undefined) {
+      if (evidence !== undefined && call.device && evidence.notice.source === call.device) {
         job.executionBackend = evidence.notice.executionBackend;
         job.executionModel = evidence.notice.executionModel;
+        // A delayed flow snapshot cannot override a newer acceptance or reassign an unassigned call.
         job.executorId = evidence.notice.executorId;
       }
-      if (call.phase === 'queued') { queued.push(job); } else { jobs.push(job); }
+      if (call.phase === 'queued' || call.phase === 'waiting-send') { queued.push(job); } else { jobs.push(job); }
     }
     // Older hubs report the cluster size without publishing device identities.
     // Keep that missing information visible without assigning slots or tasks to it.
@@ -192,7 +205,11 @@ export class TaskRoutingStore {
         question: '', kind: notice.kind, image: '', phase: notice.phase, running: true,
         startedAt: entry.receivedAt - notice.elapsed, phaseStartedAt: entry.receivedAt - notice.elapsed });
     }
-    const event: RoutingEvent = { devices: devices, jobs: jobs, queuedCalls: queued, flowCalls: mirrors };
+    const event: RoutingEvent = {
+      devices: devices, jobs: jobs, queuedCalls: queued, flowCalls: mirrors,
+      llamaManagerDeviceId: connected && connectedHub !== null ?
+        (connectedHub.deviceUid || connectedHub.id || 'connected:' + readyEpoch) : ''
+    };
     return JSON.stringify(event);
   }
 }

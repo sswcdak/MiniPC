@@ -5,7 +5,7 @@ const coreBox={exports:{}};vm.runInNewContext(transpile(path.resolve(__dirname,'
 const {ConversationContext}=coreBox.exports;
 const ledgerBox={exports:{},require:()=>({ConversationContext})};vm.runInNewContext(transpile(path.resolve(__dirname,'../../entry/src/main/ets/model/TaskConversationLedger.ets')),ledgerBox);
 const source=fs.readFileSync(path.resolve(__dirname,'../../entry/src/main/ets/pages/Index.ets'),'utf8').replace(/\r\n/g,'\n'),lines=source.split('\n');
-const names=['initializeTabletSessions','captureEngineSession','saveSelectedDraft','selectSession','newSession','createTabletSession','sessionBusy','canClearSession','clearSessionHistory','sessionMessages','switchConversation','isEmptyTabletSession','restoreTabletSessions','restoreResultBubbles',
+const names=['applyQuickInput','quickInputLabel','composerHeight','initializeTabletSessions','captureEngineSession','saveSelectedDraft','selectSession','newSession','createTabletSession','sessionBusy','canClearSession','clearSessionHistory','sessionMessages','switchConversation','isEmptyTabletSession','restoreTabletSessions','restoreResultBubbles',
  'selectedSessionTitle','sessionStatus','visibleMessages','canClearAllSessions','clearAllSessions','persistTabletSessions','drainTaskQueue','runAgent','canSend','clearAttachment','composeAttachmentTask',
  'ledgerFor','setSessionMessages','refreshTaskActivity','startConcurrentTask','updateConcurrentTask','finishConcurrentTask','cancelSessionTasks','cancelAllConcurrentTasks',
  'clearWaitingTasks','deleteSession','resultTranscript','buildRemoteConversation','ensureTaskConnection','openNewSession','closeSessionDrawer','chooseAttachment'];
@@ -18,16 +18,17 @@ const workers=[];class Worker{
  cancel(){this.cancelled=true;this.finish('已停止生成','cancelled');}
  late(answer){this.observe({phase:'done',status:'完成',answer,process:'',device:'',startedAt:100,endedAt:200});}
 }
-let savedSessions='[]',total=3,legacyClears=0;let pickResult=null;let encodeResult=null;
+let savedSessions='[]',total=3,legacyClears=0;let pickResult=null;let encodeResult=null;let catResult=null;
 const BubbleKind={USER:0,LOOP:1,PROCESS:2,TASK:3,ERROR:4};
 const box={exports:{},fs:{OpenMode:{CREATE:1,WRITE_ONLY:2,TRUNC:4},openSync:()=>({fd:1}),writeSync(_fd,text){savedSessions=text;},closeSync(){},readTextSync:()=>savedSessions},clearStoredConversation(){legacyClears++;},ConversationRole:coreBox.exports.ConversationRole,ConversationContext,TaskConversationLedger:ledgerBox.exports.TaskConversationLedger,
  ConcurrentChatTask:Worker,BubbleKind,PARTIAL_HISTORY_NOTE:'（上一轮未得到完整回答）',LIVE_PLACEHOLDER:'正在生成…',REMOTE_HISTORY_TURNS:6,REMOTE_HISTORY_MAX_CHARS:4000,
  inferenceClient:{clusterLoad:()=>({total,idle:total})},taskProgressActive:p=>p==='running'||p==='preparing',Edge:{Bottom:1},Curve:{EaseOut:0},Date,
+ QUICK_INPUT_LABELS:['长文本总结','图片分析','代码生成','简单问答'],prepareQuickInputCat:async()=>await catResult,
  pickAttachment:async()=>await pickResult,encodeLocalImageBase64:async()=>{if(encodeResult)return await encodeResult;throw new Error('bad image');}};
 vm.runInNewContext(ts.transpileModule('class Page {'+names.map(method).join('\n')+'} exports.Page=Page;', {compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,box);
 function page(){const p=new box.exports.Page();Object.assign(p,{sessions:[],messages:[],conversation:new ConversationContext(),message:'',taskQueue:[],nextSessionId:1,
  selectedSessionId:'',engineSessionId:'',nextQueuedTaskId:1,nextChatBubbleId:1,pageActive:true,sending:false,queueDraining:false,taskClosing:false,activeTaskSessions:[],activeChatTasks:new Map(),taskLedgers:new Map(),
- preparingSubmission:false,sessionDrawerVisible:false,pendingPath:'',pendingKind:'',pendingName:'',pendingLocal:'',chatMode:'chat',remoteRunGeneration:0,
+ quickInputs:['长文\n原文','请分析猫图','写一个待办项目','介绍华为'],preparingSubmission:false,sessionDrawerVisible:false,pendingPath:'',pendingKind:'',pendingName:'',pendingLocal:'',chatMode:'chat',remoteRunGeneration:0,
  getAbilityContext:()=>({filesDir:'/test'}),getUIContext:()=>({animateTo(_options,update){update();}}),buildMessagesFromConversation:c=>c.toChatMessages().map(t=>({text:t.content,kind:t.role==='user'?0:1})),
  createChatBubble(speaker,text,kind,imagePath=''){return {id:this.nextChatBubbleId++,speaker,text,kind,imagePath,collapsible:false,expanded:false,revision:0};},
  scroller:{scrollEdge(){}},setCollaborationKeepScreenOn(){},ensureRemoteReady:async()=>true});p.initializeTabletSessions();return p;}
@@ -35,22 +36,45 @@ async function tick(){for(let i=0;i<30;i++)await Promise.resolve();}
 async function submit(p,text){p.message=text;await p.runAgent();}
 async function submitNew(p,text){p.openNewSession();await submit(p,text);}
 (async()=>{
+ const quick=page(),quickWorkers=workers.length;
+ quick.newSession();const original=quick.selectedSessionId;quick.message='旧会话草稿';quick.pendingKind='document';quick.pendingPath='original.txt';
+ await quick.applyQuickInput(0);const longId=quick.selectedSessionId;
+ assert.notEqual(longId,original);assert.equal(quick.message,'长文\n原文');assert.equal(quick.composerHeight(),110);
+ assert.equal(quick.sessions.find(s=>s.id===original).draft,'旧会话草稿');assert.equal(quick.sessions.find(s=>s.id===original).pendingPath,'original.txt');
+ assert.equal(quick.pendingPath,'');assert.equal(quick.sessions.find(s=>s.id===longId).conversation.toChatMessages().length,0);
+ await quick.applyQuickInput(3);assert.notEqual(quick.selectedSessionId,longId);assert.equal(quick.message,'介绍华为');assert.equal(quick.composerHeight(),44);
+ assert.equal(workers.length,quickWorkers,'quick input fills a fresh draft without sending');
+ const imageGate=deferred();catResult=imageGate.promise;const imageAction=quick.applyQuickInput(1),imageSession=quick.selectedSessionId;
+ assert.equal(quick.preparingSubmission,true);quick.switchConversation(original);
+ imageGate.resolve({kind:'image',name:'cat.jpg',relativePath:'uploads/cat.jpg',localPath:'/test/cat.jpg'});await imageAction;
+ assert.equal(quick.sessions.find(s=>s.id===imageSession).pendingLocal,'/test/cat.jpg');assert.equal(quick.pendingPath,'original.txt','late image stays with its own session');assert.equal(quick.message,'旧会话草稿');
+ assert.equal(quick.preparingSubmission,false);
+ const deletedGate=deferred();catResult=deletedGate.promise;const deletedAction=quick.applyQuickInput(1),deletedId=quick.selectedSessionId;
+ quick.deleteSession(deletedId);deletedGate.resolve({kind:'image',name:'cat.jpg',relativePath:'uploads/cat.jpg',localPath:'/test/cat.jpg'});await deletedAction;
+ assert(!quick.sessions.some(s=>s.id===deletedId),'late image cannot recreate a deleted conversation');
+ catResult=Promise.reject(new Error('asset read failure'));await quick.applyQuickInput(1);assert.match(quick.attachError,/猫图加载失败/);assert.equal(quick.preparingSubmission,false);
+ const noOp=quick.sessions.length;quick.quickInputs[2]='';await quick.applyQuickInput(2);assert.equal(quick.sessions.length,noOp,'disabled preset never opens an empty conversation');
+ const immediate=page(),fiveStart=workers.length;total=2;
+ for(let i=0;i<5;i++)await submitNew(immediate,'中心任务'+i);
+ assert.equal(workers.length-fiveStart,5,'all five user tasks start with only two reported compute devices');
+ assert.equal(immediate.taskQueue.length,0);assert.equal(immediate.activeTaskSessions.length,5);
+ for(const worker of workers.slice(fiveStart))worker.finish('完成');await tick();total=3;
  const p=page(),start=workers.length;
  await submitNew(p,'会话A');const a=p.sessions[0].id;
  await submitNew(p,'会话B');const b=p.sessions[1].id;
  await submitNew(p,'会话C');await submitNew(p,'会话D');
  assert.equal(p.sessions.length,4,'explicit new sessions keep concurrent work separate');
- assert.equal(workers.length-start,3);assert.equal(p.taskQueue.length,1,'device capacity still queues excess conversations');
- assert.equal(new Set(p.activeTaskSessions).size,3);
+ assert.equal(workers.length-start,4);assert.equal(p.taskQueue.length,0,'device count does not hold submissions on the tablet');
+ assert.equal(new Set(p.activeTaskSessions).size,4);
  assert.deepEqual(Array.from(workers[start+1].input.conversation.toChatMessages()),[],'new conversations do not inherit selected history');
  p.switchConversation(a);assert.equal(p.selectedSessionId,a);assert.equal(p.sessionDrawerVisible,false);
  const beforeBusy=p.sessions[0].messages.length;
  await submit(p,'不能抢先追问');p.clearSessionHistory();
- assert.equal(p.sessions[0].messages.length,beforeBusy);assert.equal(workers.length-start,3,'a busy conversation cannot send another round');
+ assert.equal(p.sessions[0].messages.length,beforeBusy);assert.equal(workers.length-start,4,'a busy conversation cannot send another round');
  assert.equal(p.canClearSession(),false);assert.equal(p.canClearAllSessions(),false);
- workers[start].finish('A的回答');await tick();assert.equal(workers.length-start,4,'next conversation gets released capacity');
+ workers[start].finish('A的回答');await tick();assert.equal(workers.length-start,4,'completion does not start a second copy of an already submitted task');
  const cardCount=p.sessions.length;await submit(p,'继续会话A');assert.equal(p.sessions.length,cardCount,'main composer follows up in the selected conversation');
- assert.equal(p.taskQueue.length,1);workers[start+1].finish('B的回答');await tick();
+ assert.equal(p.taskQueue.length,0);workers[start+1].finish('B的回答');await tick();
  assert.equal(workers.length-start,5);
  assert.deepEqual(Array.from(workers[start+4].input.conversation.toChatMessages(),t=>t.content),['会话A','A的回答'],'follow-up uses this conversation history');
  workers[start+2].finish('C的回答');workers[start+3].finish('D的回答');workers[start+4].finish('A的追问回答');await tick();

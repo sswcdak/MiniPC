@@ -1,5 +1,6 @@
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { common } from '@kit.AbilityKit';
 import fs from '@ohos.file.fs';
 import { ensureSandboxWorkspace, sandboxWorkspacePath } from '@loop/agent-core';
 
@@ -10,6 +11,23 @@ export interface SavedAttachment {
   name: string;
   relativePath: string;
   localPath: string;
+}
+
+/** Install the bundled example in the same workspace used by picked images and inference. */
+export async function prepareQuickInputCat(context: common.Context): Promise<SavedAttachment> {
+  const bytes = await context.resourceManager.getRawFileContent('quick-inputs/cat.jpg');
+  if (bytes.byteLength === 0) throw new Error('猫图素材为空');
+  ensureSandboxWorkspace();
+  const folder = sandboxWorkspacePath('uploads');
+  if (!pathExists(folder)) fs.mkdirSync(folder, true);
+  const relativePath = 'uploads/quick-input-cat-v1.jpg';
+  const localPath = sandboxWorkspacePath(relativePath);
+  const file = fs.openSync(localPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+  try {
+    const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    if (fs.writeSync(file.fd, data) !== bytes.byteLength) throw new Error('猫图保存不完整');
+  } finally { fs.closeSync(file); }
+  return { kind: 'image', name: 'cat.jpg', relativePath: relativePath, localPath: localPath };
 }
 
 export function pickAttachment(): Promise<SavedAttachment | null> {

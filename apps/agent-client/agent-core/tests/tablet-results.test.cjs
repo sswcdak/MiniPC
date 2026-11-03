@@ -3,6 +3,14 @@ const {transpile}=require('../../../../tests/ets-harness.cjs');
 const box={exports:{}};
 vm.runInNewContext(transpile(path.resolve(__dirname,'../../entry/src/main/ets/ui/ResultOverview.ets')),box);
 const {resultTurns,resultSnippet,resultPhaseLabel,resultElapsed,resultIsActive,resultInputLabel,sessionResult}=box.exports;
+const textMetrics={exports:{}};
+vm.runInNewContext(transpile(path.resolve(__dirname,'../../entry/src/main/ets/ui/ChatTextMetrics.ets')),textMetrics);
+const {chatCharacterCount,chatCharacterLabel}=textMetrics.exports;
+assert.equal(chatCharacterLabel(''),'0字');
+assert.equal(chatCharacterLabel('你好，世界！'),'6字');
+assert.equal(chatCharacterCount(' A\t中\r\n文 😀 𠮷 '),5,'whitespace is excluded and surrogate pairs count once');
+assert.equal(chatCharacterCount('完整回答\n'+'测试内容。\n'.repeat(1000)),5004,'long and multiline content is counted without truncation');
+assert.equal(chatCharacterLabel('回'),'1字');assert.equal(chatCharacterLabel('回复新增内容'),'6字','streaming growth uses the current text');
 const message=(id,kind,text='',extra={})=>({id,revision:0,kind,text,imagePath:'',pending:false,phase:'',...extra});
 const input='长输入\n\n'+'请保留这份计划的全部内容。\n'.repeat(30);
 const answer='完整回答\n'+'工作项与验收标准\n'.repeat(50);
@@ -25,6 +33,8 @@ assert.equal(turns[0].phase,'queued');assert.equal(turns[1].phase,'failed');asse
 turns=resultTurns([message(1,'input','停止'),message(2,'status','',{phase:'cancelled'}),message(3,'answer','部分回答\n已停止生成')]);
 assert.equal(turns[0].phase,'cancelled');assert.equal(turns[0].answer,'部分回答\n已停止生成');
 assert.equal(resultTurns([]).length,0);assert.equal(resultPhaseLabel('cancelled'),'已停止');
+const waitingAtHub=resultTurns([message(20,'input','中心等待'),message(21,'status','',{phase:'running',inferencePhase:'hub-queued',startedAt:1000,endedAt:0})])[0];
+assert.equal(waitingAtHub.phase,'hub-queued');assert.equal(resultPhaseLabel(waitingAtHub.phase),'中心等待分派');assert.equal(resultIsActive(waitingAtHub.phase),true);assert.equal(resultElapsed(waitingAtHub,12000),'00:11');
 let timed=resultTurns([message(1,'input','（附图）',{imagePath:'/photo.jpg'}),message(2,'status','',{
  phase:'running',inferencePhase:'prefill',device:'算力设备2',startedAt:1000,endedAt:0})])[0];
 assert.equal(timed.phase,'prefill');assert.equal(timed.device,'算力设备2');assert.equal(resultInputLabel(timed),'图片输入');

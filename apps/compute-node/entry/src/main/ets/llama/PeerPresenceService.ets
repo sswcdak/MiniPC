@@ -1,4 +1,5 @@
 import { BusinessError, deviceInfo, runningLock } from '@kit.BasicServicesKit';
+import hidebug from '@ohos.hidebug';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import socket from '@ohos.net.socket';
 import buffer from '@ohos.buffer';
@@ -7,7 +8,8 @@ import llamaProbe from 'libllama_probe.so';
 import {
   LlamaInferenceConfig,
   llamaRuntimeOptions,
-  loadLlamaInferenceConfig
+  loadLlamaInferenceConfig,
+  saveLlamaInferenceConfig
 } from '../llm/LlamaSettings';
 import { llamaModelFile } from '../llm/ModelRegistry';
 
@@ -25,17 +27,33 @@ export interface PeerPresenceSnapshot {
   expertRam: number;
   hit: number;
   disk: number;
+  memTotal: number;
+  memAvail: number;
 }
 
 export interface PeerStartRequest {
   fromIp: string;
   split: string;
+  model?: string;
+  contextSize?: number;
+  otherArgs?: string;
+  hotCold?: boolean;
+  expertSkip?: boolean;
+  skipRange?: string;
+  port?: number;
 }
 
 interface StartCommand {
   type: string;
   from: string;
   split: string;
+  model?: string;
+  contextSize?: number;
+  otherArgs?: string;
+  hotCold?: boolean;
+  expertSkip?: boolean;
+  skipRange?: string;
+  port?: number;
 }
 
 interface PresencePayload {
@@ -46,6 +64,8 @@ interface PresencePayload {
   expertRam: number;
   hit: number;
   disk: number;
+  memTotal: number;
+  memAvail: number;
   ts: number;
   name: string;
   ip: string;
@@ -69,7 +89,9 @@ export class PeerPresenceService {
     rss: 0,
     expertRam: 0,
     hit: -1,
-    disk: 0
+    disk: 0,
+    memTotal: 0,
+    memAvail: 0
   };
 
   static start(filesDir: string = ''): void {
@@ -98,8 +120,8 @@ export class PeerPresenceService {
   }
 
   /** Ask the rank-1 app to load the same model as a distributed follower. */
-  static requestStart(peerIp: string, split: string): Promise<boolean> {
-    return PeerPresenceService.instance.requestStartInternal(peerIp, split);
+  static requestStart(peerIp: string, split: string, config: LlamaInferenceConfig | null = null): Promise<boolean> {
+    return PeerPresenceService.instance.requestStartInternal(peerIp, split, config);
   }
 
   private localIp(): string {
@@ -176,6 +198,14 @@ export class PeerPresenceService {
       const rank = nativeRank >= 0 ? nativeRank :
         (config !== null && config.peerIp.length > 0 ? (config.roleMaster ? 0 : 1) : 0);
       const hit = Number(status['hit']);
+      let memTotal = this.snapshot.memTotal;
+      let memAvail = this.snapshot.memAvail;
+      try {
+        const memory = hidebug.getSystemMemInfo();
+        memTotal = Number(memory.totalMem) * 1024;
+        memAvail = Number(memory.availableMem) * 1024;
+      } catch (_) {
+      }
       this.snapshot = {
         rank: rank,
         serving: state === 'ready' || state === 'busy' ? 1 : 0,
@@ -183,14 +213,17 @@ export class PeerPresenceService {
         rss: Number(status['rss']) || 0,
         expertRam: Number(status['expertRam']) || 0,
         hit: Number.isFinite(hit) && hit >= 0 ? hit : -1,
-        disk: Number(status['disk']) || 0
+        disk: Number(status['disk']) || 0,
+        memTotal: memTotal,
+        memAvail: memAvail
       };
     } catch (_) {
       // Keep the last valid topology sample.
     }
   }
 
-  private async requestStartInternal(peerIp: string, split: string): Promise<boolean> {
+  private async requestStartInternal(peerIp: string, split: string,
+    config: LlamaInferenceConfig | null): Promise<boolean> {
     if (peerIp.length === 0) return false;
     // A distributed request can be the first action after app launch. Retry
     // here as well, because the saved config may not have been readable during
@@ -213,7 +246,11 @@ export class PeerPresenceService {
       client.connect({ address: { address: peerIp, port: PRESENCE_PORT }, timeout: 1500 })
         .then((): void => {
           client.send({ data: JSON.stringify({
-            type: 'start', from: this.localIp(), split: split
+            type: 'start', from: this.localIp(), split: split,
+            model: config?.model || '', contextSize: config?.contextSize || 0,
+            otherArgs: config?.otherArgs || '', hotCold: config?.hotCold === true,
+            expertSkip: config?.expertSkip === true, skipRange: config?.skipRange || '',
+            port: config?.port || 0
           }) + '\n' }).then((): void => {
             sent = true;
             setTimeout((): void => finish(true), 350);
@@ -228,11 +265,32 @@ export class PeerPresenceService {
       hilog.error(domain, TAG, 'remote start skipped: filesDir unavailable');
       return;
     }
-    const config = loadLlamaInferenceConfig(this.filesDir);
-    if (config === null || config.peerIp.length === 0 || config.peerIp !== request.fromIp) {
-      hilog.warn(domain, TAG, 'remote start ignored: peer mismatch configured=%{public}s from=%{public}s',
-        config === null ? '' : config.peerIp, request.fromIp);
+    const stored = loadLlamaInferenceConfig(this.filesDir);
+    const model = (request.model || '').trim().length > 0 ? (request.model || '').trim() :
+      (stored === null ? '' : stored.model);
+    if (model.length === 0) {
+      hilog.error(domain, TAG, 'remote start ignored: rank0 did not provide a model');
       return;
+    }
+    // rank0 is the single source of truth for the cascade runtime configuration.
+    const config: LlamaInferenceConfig = {
+      model: model,
+      contextSize: (request.contextSize || 0) > 0 ? (request.contextSize || 8192) :
+        (stored === null ? 8192 : stored.contextSize),
+      otherArgs: request.otherArgs === undefined ? (stored === null ? '' : stored.otherArgs) : request.otherArgs,
+      hotCold: request.hotCold === undefined ? (stored === null ? false : stored.hotCold) : request.hotCold,
+      expertSkip: request.expertSkip === undefined ?
+        (stored === null ? false : stored.expertSkip) : request.expertSkip,
+      skipRange: request.skipRange === undefined ?
+        (stored === null ? '' : stored.skipRange) : request.skipRange,
+      distMode: request.split,
+      peerIp: request.fromIp,
+      roleMaster: false,
+      port: (request.port || 0) > 0 ? (request.port || 8080) : (stored === null ? 8080 : stored.port)
+    };
+    const saveError = saveLlamaInferenceConfig(this.filesDir, config);
+    if (saveError.length > 0) {
+      hilog.warn(domain, TAG, 'received cascade config could not be persisted: %{public}s', saveError);
     }
     // This path is how rank 1 starts a follower. Hold the background lock here
     // even if the service was created before llama-inference.json existed.
@@ -243,24 +301,12 @@ export class PeerPresenceService {
       hilog.info(domain, TAG, 'remote start skipped: native state=%{public}s', state);
       return;
     }
-    const runtimeConfig: LlamaInferenceConfig = {
-      model: config.model,
-      contextSize: config.contextSize,
-      otherArgs: config.otherArgs,
-      hotCold: config.hotCold,
-      expertSkip: config.expertSkip,
-      skipRange: config.skipRange,
-      distMode: request.split,
-      peerIp: request.fromIp,
-      roleMaster: false,
-      port: config.port
-    };
     const modelPath = llamaModelFile(this.filesDir + '/models/' + config.model);
     if (modelPath.length === 0) {
       hilog.error(domain, TAG, 'remote start skipped: configured model missing');
       return;
     }
-    const options = llamaRuntimeOptions(this.filesDir, runtimeConfig, config.contextSize, this.localIp());
+    const options = llamaRuntimeOptions(this.filesDir, config, config.contextSize, this.localIp());
     if (options.distRanks !== 2 || options.distRank !== 1) {
       hilog.error(domain, TAG, 'remote start ignored: derived rank=%{public}d/%{public}d',
         options.distRank, options.distRanks);
@@ -312,6 +358,8 @@ export class PeerPresenceService {
       expertRam: this.snapshot.expertRam,
       hit: this.snapshot.hit,
       disk: this.snapshot.disk,
+      memTotal: this.snapshot.memTotal,
+      memAvail: this.snapshot.memAvail,
       ts: Date.now(),
       name: modelName.length > 0 ? modelName : 'HarmonyOS PC',
       ip: this.localIp()
@@ -342,7 +390,14 @@ export class PeerPresenceService {
             if (command.type === 'start' && typeof command.from === 'string' && command.from.length > 0) {
               const request: PeerStartRequest = {
                 fromIp: command.from,
-                split: typeof command.split === 'string' && command.split.length > 0 ? command.split : 'layer'
+                split: typeof command.split === 'string' && command.split.length > 0 ? command.split : 'layer',
+                model: typeof command.model === 'string' ? command.model : '',
+                contextSize: typeof command.contextSize === 'number' ? command.contextSize : 0,
+                otherArgs: typeof command.otherArgs === 'string' ? command.otherArgs : '',
+                hotCold: command.hotCold === true,
+                expertSkip: command.expertSkip === true,
+                skipRange: typeof command.skipRange === 'string' ? command.skipRange : '',
+                port: typeof command.port === 'number' ? command.port : 0
               };
               this.pendingStart = request;
               hilog.info(domain, TAG, 'remote start requested by %{public}s', request.fromIp);
