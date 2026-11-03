@@ -22,9 +22,6 @@ let helpers = part('    function summaryText(', '    function focusWithoutScroll
  part('    function esc(', source.includes('    function sideClass(') ? '    function sideClass(' : '    function shortModel(')+
  part('    function publicJobName(', '    function updateButton(')+
  part('    function jobKey(', '    // The rail is rebuilt');
-// Keep tablet model-name shortening and backend display rules when regenerating assets.
-const tabletDisplayName=previous.match(/    function computeDisplayName\(device\)\{[\s\S]*?\n    \}/);
-if(tabletDisplayName)helpers=helpers.replace(/    function computeDisplayName\(device\)\{[\s\S]*?\n    \}/,tabletDisplayName[0]);
 let renderer = part('    const flowView=', '    function setTaskView(');
 if (hasCloudAdapter) {
  const start=previous.indexOf('    const flowView='), end=previous.indexOf('\nconst viewport=',start);
@@ -38,8 +35,6 @@ renderer=renderer.replace('class="flow-compute" data-row-key="compute:',
  `class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:`);
 renderer=renderer.replace(/height=Math.max\(device.ready\?(?:256|304|344):(?:304|344|384),96\+Math.max\(1,active.length\)\*108\)/,
  'height=Math.max(device.ready?344:384,96+Math.max(1,active.length)*108)');
-renderer=renderer.replace("<span>'+esc(computeDisplayName(d))+'</span>",
- "<span title=\"'+esc(computeDisplayName(d))+'\">'+esc(computeDisplayName(d))+'</span>");
 renderer=renderer.replace('left=380,rowWidth=', 'left=320,rowWidth=');
 if (!renderer.includes('const spread=width/960;')) {
  renderer=renderer.replace('const width=Math.max(960,(flowView.clientWidth||1024)-44),left=320,rowWidth=width-left-18;',
