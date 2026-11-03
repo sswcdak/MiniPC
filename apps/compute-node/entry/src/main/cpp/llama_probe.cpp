@@ -1566,7 +1566,7 @@ void ensureWorker() {
 
 void logRejectedStart(const char * reason, int64_t running, size_t queued) {
     OH_LOG_WARN(LOG_APP, "start rejected: %{public}s running=%{public}lld queued=%{public}zu",
-        reason, running, queued);
+        reason, static_cast<long long>(running), queued);
 }
 
 std::string getString(napi_env env, napi_value value) {
