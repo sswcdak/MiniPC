@@ -496,12 +496,12 @@ bool localPortListening(int port) {
         char line[512];
         bool found = false;
         while (fgets(line, sizeof(line), file) != nullptr) {
+            char localAddress[65] = {};
+            char remoteAddress[65] = {};
             unsigned int localPort = 0;
             unsigned int state = 0;
-            const char * colon = strchr(line, ':');
-            if (colon != nullptr &&
-                sscanf(colon + 1, "%*64[0-9A-Fa-f]:%X %*64[0-9A-Fa-f]:%*X %X",
-                    &localPort, &state) == 2 &&
+            if (sscanf(line, " %*u: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%*X %X",
+                    localAddress, &localPort, remoteAddress, &state) == 4 &&
                 localPort == target && state == 0x0A) {
                 found = true;
                 break;
@@ -754,6 +754,8 @@ public:
         g_modelReady.store(false);
         g_serverFollowerReady.store(false);
         g_serverExitCode.store(1);
+        backendExitCode.store(1);
+        backendRunning.store(true);
         g_statusExpertRamBytes.store(0);
         g_statusDiskBytes.store(0);
         g_statusHitPct.store(-1);
@@ -781,7 +783,7 @@ public:
             options.distFollower ? 1 : 0);
         const auto started = Clock::now();
         g_serverThreadRunning.store(true);
-        serverThread = std::thread([args = std::move(args)]() mutable {
+        serverThread = std::thread([this, args = std::move(args)]() mutable {
             std::vector<char *> argv;
             argv.reserve(args.size());
             for (std::string & arg : args) argv.push_back(arg.data());
@@ -794,6 +796,8 @@ public:
                 OH_LOG_ERROR(LOG_APP, "llama_server unknown exception");
             }
             g_serverExitCode.store(result);
+            backendExitCode.store(result);
+            backendRunning.store(false);
             g_serverThreadRunning.store(false);
             g_modelReady.store(false);
             OH_LOG_INFO(LOG_APP, "llama_server exited ret=%{public}d", result);
@@ -814,8 +818,8 @@ public:
                     break;
                 }
             }
-            if (!g_serverThreadRunning.load()) {
-                const int32_t result = g_serverExitCode.load();
+            if (!backendRunning.load()) {
+                const int32_t result = backendExitCode.load();
                 setStatus(result == 0 ? "llama-server stopped during startup" : "llama-server startup failed");
                 g_modelLoading.store(false);
                 return false;
@@ -840,9 +844,18 @@ public:
         return true;
     }
 
+    bool backendAlive() const {
+        return backendRunning.load();
+    }
+
+    std::string backendFailureMessage() const {
+        return "llama-server 后端已退出（code " +
+            std::to_string(backendExitCode.load()) + "），本次推理已中断。";
+    }
+
     void release() {
         if (serverThread.joinable()) {
-            if (g_serverThreadRunning.load() && !loadedFollower) {
+            if (backendRunning.load() && !loadedFollower) {
                 llama_server_terminate();
             }
             serverThread.join();
@@ -853,6 +866,7 @@ public:
         loadedFollower = false;
         g_serverFollowerReady.store(false);
         g_serverThreadRunning.store(false);
+        backendRunning.store(false);
         g_statusContext.store(0);
         g_statusDistRank.store(-1);
         g_statusDistRanks.store(1);
@@ -866,6 +880,8 @@ public:
 
 private:
     std::thread serverThread;
+    std::atomic<bool> backendRunning{false};
+    std::atomic<int32_t> backendExitCode{1};
     std::string loadedPath;
     std::string loadedRuntimeKey;
     int32_t loadedContext = 0;
@@ -1055,7 +1071,14 @@ void executeServer(ServerEngine & engine, const Job & job) {
         }
         struct pollfd item = {descriptor, POLLIN, 0};
         const int ready = poll(&item, 1, 300);
-        if (ready == 0) continue;
+        if (ready == 0) {
+            if (!engine.backendAlive()) {
+                protocolError = true;
+                errorMessage = engine.backendFailureMessage();
+                break;
+            }
+            continue;
+        }
         if (ready < 0) {
             if (errno == EINTR) continue;
             protocolError = true;
@@ -1063,7 +1086,14 @@ void executeServer(ServerEngine & engine, const Job & job) {
             break;
         }
         const ssize_t count = recv(descriptor, buffer, sizeof(buffer), 0);
-        if (count == 0) break;
+        if (count == 0) {
+            if (!finishSeen && !complete) {
+                protocolError = true;
+                errorMessage = engine.backendAlive() ?
+                    "llama-server 在响应完成前关闭了连接。" : engine.backendFailureMessage();
+            }
+            break;
+        }
         if (count < 0) {
             if (errno == EINTR) continue;
             protocolError = true;
@@ -1534,6 +1564,11 @@ void ensureWorker() {
     }
 }
 
+void logRejectedStart(const char * reason, int64_t running, size_t queued) {
+    OH_LOG_WARN(LOG_APP, "start rejected: %{public}s running=%{public}lld queued=%{public}zu",
+        reason, running, queued);
+}
+
 std::string getString(napi_env env, napi_value value) {
     size_t length = 0;
     if (napi_get_value_string_utf8(env, value, nullptr, 0, &length) != napi_ok) {
@@ -1669,7 +1704,14 @@ napi_value Start(napi_env env, napi_callback_info info) {
     int64_t jobId = 0;
     {
         std::lock_guard<std::mutex> lock(g_queueMutex);
-        if (g_runningJobId.load() != 0 || !g_jobs.empty() || job.modelPath.empty()) {
+        if (job.modelPath.empty()) {
+            logRejectedStart("empty model path", g_runningJobId.load(), g_jobs.size());
+            napi_value invalid;
+            napi_create_int64(env, -2, &invalid);
+            return invalid;
+        }
+        if (g_runningJobId.load() != 0 || !g_jobs.empty()) {
+            logRejectedStart("worker busy", g_runningJobId.load(), g_jobs.size());
             napi_value busy;
             napi_create_int64(env, -1, &busy);
             return busy;

@@ -292,6 +292,9 @@ export function validMessage(m: WireMessage): boolean {
     return true;
   }
   if (typeof m.requestId !== 'string' || m.requestId.length === 0 || m.requestId.length > 128) return false;
+  if (m.type === 'llama.manage') {
+    return typeof m.text === 'string' && m.text.length > 0 && m.text.length <= 20000;
+  }
   if (m.type === 'cancel' || m.type === 'prepare') return true;
   if (m.type === 'prepared') return m.error === undefined ||
     (typeof m.error === 'string' && m.error.length <= 2048);

@@ -69,6 +69,13 @@ interface PeerStartCommand {
   type: string;
   from: string;
   split: string;
+  model: string;
+  contextSize: number;
+  otherArgs: string;
+  hotCold: boolean;
+  expertSkip: boolean;
+  skipRange: string;
+  port: number;
 }
 
 interface PeerStartEventData {
@@ -319,6 +326,7 @@ struct Index {
   @State slavePort: string = '30001';
   @State peerDevices: PeerDevice[] = [];
   @State selectedPeerIp: string = '';
+  private preferredPeerIp: string = '';
   @State peerScanning: boolean = false;
   @State peerScanText: string = '正在搜索对端设备...';
   private peerScanAtMs: number = 0;
@@ -387,6 +395,13 @@ struct Index {
       : (this.distMode === 'expert' ? '专家并行' : '神经元并行');
   }
   localEthIp(): string {
+    try {
+      const ips = JSON.parse(testNapi.getnetworkips()) as Record<string, string>;
+      const actual = typeof ips['eth'] === 'string' ? ips['eth'].trim() : '';
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(actual)) {
+        return actual;
+      }
+    } catch (_) {}
     const ip = this.masterIp.trim();
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
       return ip;
@@ -524,10 +539,40 @@ struct Index {
     };
     const error = saveLlamaInferenceConfig(this.filesDir, config);
     if (error.length === 0) {
+      this.preferredPeerIp = config.peerIp;
       // Re-evaluate the running lock after a co-op peer is configured.
       PeerPresenceService.start(this.filesDir);
     }
     return error;
+  }
+
+  private saveCascadeConfig(): void {
+    const error = this.saveInferenceConfig();
+    if (error.length > 0) {
+      this.message = '协同配置保存失败: ' + error;
+    }
+  }
+
+  private restoreSavedInferenceConfig(): void {
+    const saved = loadLlamaInferenceConfig(this.filesDir);
+    if (saved === null) {
+      return;
+    }
+    if (this.modelList.indexOf(saved.model) >= 0) {
+      this.selectedBuiltin = saved.model;
+      this.selectedModel = this.filesDir + '/models/' + saved.model;
+    }
+    this.contextSize = saved.contextSize;
+    this.otherargs = saved.otherArgs;
+    this.hotColdOn = saved.hotCold;
+    this.bisectOn = saved.expertSkip;
+    this.bisectConfig = saved.skipRange;
+    this.distMode = saved.distMode;
+    this.selectedPeerIp = saved.peerIp.trim();
+    this.preferredPeerIp = this.selectedPeerIp;
+    this.roleIsMaster = saved.roleMaster;
+    this.port = saved.port;
+    this.loadStatus = '配置已保存 · 请求时加载';
   }
 
   private async runDirectChat(text: string): Promise<void> {
@@ -1013,7 +1058,9 @@ struct Index {
       rss: this.appPssBytes,
       expertRam: this.expertRamBytes,
       hit: this.poolHitPct,
-      disk: this.diskWeightBytes
+      disk: this.diskWeightBytes,
+      memTotal: this.memTotalBytes,
+      memAvail: this.memFreeBytes
     };
     PeerPresenceService.update(snapshot);
   }
@@ -1255,6 +1302,17 @@ struct Index {
         }
       }
       found = merged;
+      const preferredPeer = this.preferredPeerIp.trim();
+      if (preferredPeer.length > 0 && !found.some((peer: PeerDevice): boolean => peer.ip === preferredPeer)) {
+        found.push({
+          ip: preferredPeer,
+          name: '已保存的协同设备',
+          rank: this.roleIsMaster ? 1 : 0,
+          serving: false,
+          ready: false,
+          available: false
+        });
+      }
       found.sort((a: PeerDevice, b: PeerDevice) => this.compareIpv4(a.ip, b.ip));
       this.peerDevices = found;
       let selectionStillValid = false;
@@ -1264,7 +1322,9 @@ struct Index {
           break;
         }
       }
-      if (!selectionStillValid) {
+      if (!selectionStillValid && preferredPeer.length > 0) {
+        this.selectedPeerIp = preferredPeer;
+      } else if (!selectionStillValid) {
         const first = this.firstAvailablePeer();
         // 发现可用设备后默认勾选；实际 rank 仍按两端 IP 升序计算。
         this.selectedPeerIp = first !== null ? first.ip : '';
@@ -1466,6 +1526,7 @@ struct Index {
       this.port = saved.port;
       this.loadStatus = '配置已保存 · 请求时加载';
     }
+    this.preferredPeerIp = this.selectedPeerIp;
     this.loadDone = false;
     this.starting = false;
     this.startMemTimer();
@@ -1475,6 +1536,7 @@ struct Index {
   // 页面每次显示（含从后台切回）都确保刷新定时器在跑
   onPageShow(): void {
     this.refreshModelList();
+    this.restoreSavedInferenceConfig();
     this.startMemTimer();
     this.refreshPeerDevices();
   }
@@ -1673,7 +1735,14 @@ struct Index {
           const command: PeerStartCommand = {
             type: 'start',
             from: this.localEthIp(),
-            split: this.distMode
+            split: this.distMode,
+            model: this.selectedBuiltin,
+            contextSize: this.contextSize,
+            otherArgs: this.otherargs,
+            hotCold: this.hotColdOn,
+            expertSkip: this.bisectOn,
+            skipRange: this.bisectConfig,
+            port: this.port
           };
           tcp.send({ data: JSON.stringify(command) + '\n' }).then(() => {
             sent = true;
@@ -1709,6 +1778,7 @@ struct Index {
     this.distMode = request.split === 'expert' || request.split === 'neuron' ? request.split : 'layer';
     this.markPeerAvailable(request.fromIp);
     this.applyDistConfig();
+    this.saveCascadeConfig();
     this.message = `收到 ${request.fromIp} 的启动请求，正在启动本机服务...`;
     await this.doStartServer(true);
   }
@@ -2260,8 +2330,10 @@ struct Index {
                         } else if (this.selectedPeerIp === peer.ip) {
                           this.selectedPeerIp = '';
                         }
+                        this.preferredPeerIp = this.selectedPeerIp;
                         this.slaveIp = this.selectedPeerIp;
                         this.applyDistConfig();
+                        this.saveCascadeConfig();
                       });
                     Column() {
                       Text(peer.name).fontSize(16).fontWeight(FontWeight.Medium).width('100%')
@@ -2319,6 +2391,7 @@ struct Index {
               if (this.selectedPeerIp.length > 0) {
                 this.applyDistConfig();
               }
+              this.saveCascadeConfig();
             })
             .margin({ bottom: 14 })
           // 模式下方保留约 1/4 的弹性空间

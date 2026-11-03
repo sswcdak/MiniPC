@@ -2,7 +2,9 @@ import { ClusterInfo, DeviceInfoEntry, RoutingCall, WireMessage } from '../proto
 
 interface RouteDevice {
   id: string; name: string; role: string; ready: boolean; jobs: number;
-  model?: string; inferenceBackend?: string; memUsage?: number; capabilities?: string[]; pendingInfo?: boolean;
+  slot?: number; model?: string; inferenceBackend?: string; memTotal?: number; memAvail?: number;
+  memUsage?: number; cpuUsage?: number;
+  thermalLevel?: number; batteryTemp?: number; capabilities?: string[]; pendingInfo?: boolean;
 }
 interface FlowNotice {
   key: string; revision: number; kind: string; phase: string; source: string; origin: string;
@@ -131,7 +133,10 @@ export class TaskRoutingStore {
       id: device.deviceUid || device.id || 'roster-' + index, name: device.slot !== undefined && device.slot > 0 ?
         (device.role === 'chat' ? '聊天设备' : '算力设备') + device.slot : (device.name || (device.role === 'chat' ? '聊天设备' : '算力设备')),
       role: device.role === 'chat' ? 'chat' : 'compute', ready: device.ready !== false,
-      jobs: device.modelRequests ?? 0, model: device.model, inferenceBackend: device.inferenceBackend, memUsage: device.memUsage,
+      jobs: device.modelRequests ?? 0, slot: device.slot, model: device.model, inferenceBackend: device.inferenceBackend,
+      memTotal: device.memTotal, memAvail: device.memAvail, memUsage: device.memUsage,
+      cpuUsage: device.cpuUsage, thermalLevel: device.thermalLevel,
+      batteryTemp: device.batteryTemp,
       capabilities: device.capabilities
     }));
     // A completed handshake is enough to show the connected hub. Older compute builds

@@ -9,6 +9,7 @@ const event={kind:'dashboard',selfLabel:'算力设备1',devices,jobs:[job('one')
 h.window.onNativeEvent(event);
 let html=h.elements.collaboration.innerHTML;
 assert.equal((html.match(/class="flow-compute"/g)||[]).length,2);
+assert.doesNotMatch(h.source,/class="app-tabs"|id="tabDashboard"|id="tabLlama"/);
 assert.equal((html.match(/class="flow-task working"/g)||[]).length,2);
 assert.doesNotMatch(html,/class="flow-task waiting"|等待分配|暂无排队|flow-lane queue|<h3>排队/);
 assert.match(html,/<h3>推理中-(文本|图片)<\/h3>/);assert.match(html,/offset-path:path/);assert.match(html,/class="flow-photo"/);
@@ -19,6 +20,20 @@ assert.match(html,/class="flow-pc-local">本机<\/span>/);
 assert.match(html,/>路由中心<br>\(算力设备1\)<\/span>/);
 assert.doesNotMatch(html,/>路由层</);
 assert.equal((html.match(/class="flow-pc-local"/g)||[]).length,1);
+let llamaManagerOpens=0;
+h.window.chatBridge.openLlamaManager=()=>{llamaManagerOpens++;};
+const clusterEvent={...event,jobs:[],remoteCalls:[],queuedCalls:[],flowCalls:[],devices:[
+  {id:'cluster',name:'compute',role:'self',ready:true,jobs:0,memUsage:20,capabilities:['text'],inferenceBackend:'llama.cpp'}]};
+h.window.onNativeEvent(clusterEvent);html=h.elements.collaboration.innerHTML;
+assert.match(html,/class="flow-pc-mark flow-cluster-link"/);
+assert.match(html,/data-open-llama="1"/);
+h.elements.collaboration.handlers.click({target:h.target({'data-open-llama':'1'}),preventDefault(){},stopPropagation(){}});
+assert.equal(llamaManagerOpens,1,'cluster icon opens Llama management');
+h.window.onNativeEvent({...clusterEvent,devices:[
+  {id:'single',name:'compute',role:'self',ready:true,jobs:0,memUsage:20,capabilities:['text'],inferenceBackend:'native'}]});
+html=h.elements.collaboration.innerHTML;
+assert.doesNotMatch(html,/flow-cluster-link|data-open-llama/,'single-device icon stays non-clickable');
+h.window.onNativeEvent(event);html=h.elements.collaboration.innerHTML;
 assert.match(h.elements.usageStats.innerHTML,/累计完成<\/span><b>0/);
 assert.match(h.elements.usageStats.innerHTML,/节省 token<\/span><b>0/);
 assert.match(h.elements.usageStats.innerHTML,/节省金额<\/span><b>¥0\.00/);

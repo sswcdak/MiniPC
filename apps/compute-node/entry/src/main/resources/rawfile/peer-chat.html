@@ -38,9 +38,6 @@
     .status.err { color:var(--err); background:rgba(196,71,58,.1); }
     .connect { flex-shrink:0; border:0; border-radius:16px; padding:8px 12px; background:#fff; color:var(--accent); font-size:13px; font-weight:650; cursor:pointer; }
     .connect:disabled { opacity:.45; cursor:default; }
-    .app-tabs { display:flex; gap:3px; padding:3px; border-radius:13px; background:#fff; }
-    .app-tab { border:0; border-radius:10px; padding:7px 10px; background:transparent; color:var(--muted); font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
-    .app-tab.active { background:rgba(61,91,219,.12); color:var(--accent); }
     .gear { margin-left:auto; width:36px; height:36px; padding:0; border-radius:18px; font-size:18px; line-height:1; }
     .clear-tasks { margin-left:8px; border:0; border-radius:12px; padding:2px 10px; background:#fff; color:var(--accent); font-size:12px; font-weight:650; cursor:pointer; }
     .stats { display:flex; gap:8px; }
@@ -63,7 +60,7 @@
     .llama-metric { padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:#fff; }
     .llama-metric span { display:block; color:var(--muted); font-size:12px; }
     .llama-metric b { display:block; margin-top:6px; font-size:18px; overflow-wrap:anywhere; }
-    @media (max-width:720px) { .app-tabs { display:none; } .llama-summary { grid-template-columns:1fr; } }
+    @media (max-width:720px) { .llama-summary { grid-template-columns:1fr; } }
     .stat { flex:1; max-width:200px; padding:10px 12px; border-radius:16px; background:#fff; display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
     .stat span { font-size:12px; color:var(--muted); }
     .stat b { font-size:20px; font-weight:720; color:var(--ink); }
@@ -253,6 +250,7 @@
     .flow-compute{position:absolute;display:grid;grid-template-columns:220px minmax(260px,1fr);gap:22px;padding:22px;border:1px solid #e4e9ee;border-radius:18px;background:#fcfdfd}.flow-computer{align-self:center;display:flex;flex-direction:column;align-items:center;gap:10px;font-size:18px;font-weight:650;padding-top:0}.flow-pc-mark{position:relative;width:136px;height:96px}.flow-pc-mark>svg{width:136px;height:96px;color:#89919f;display:block}.flow-pc-local{position:absolute;left:19%;top:11%;width:62%;height:49%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#3d5bdb;letter-spacing:.12em;pointer-events:none}.flow-computer>span{text-align:center;white-space:nowrap}.flow-memory{width:120px;margin-top:0}.flow-memory>i{height:10px;background:#e3e6eb;border-radius:6px;display:block;overflow:hidden}.flow-memory em{height:100%;display:block;border-radius:6px}.flow-memory>span{display:flex;justify-content:space-between;font-size:13px;line-height:16px;font-weight:450;color:#626b85;margin-top:6px}.flow-memory b{font-weight:650}.flow-computer small{font-size:14px;color:#94640e}.flow-lane{display:flex;flex-direction:column;gap:10px;min-width:0}.flow-lane h3{font-size:18px;font-weight:650;color:var(--ok);line-height:22px;margin:0 0 4px}.flow-lane h3:before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block;vertical-align:3px;margin-right:8px}.flow-lane.busy h3{color:var(--busy)}.flow-idle{font-size:15px;color:var(--muted);padding:20px 0}
     .flow-compute[data-local="true"]{border:2px solid #92c7f4}.flow-local-label{position:absolute;left:18px;top:-14px;height:28px;display:flex;align-items:center;padding:0 12px;border:1px solid #a9d0f3;border-radius:7px;background:#e5f2ff;color:#245a89;font-size:13px;font-weight:700;line-height:1;pointer-events:none}
     .flow-computer>.flow-device-title{display:block;white-space:normal;overflow-wrap:anywhere;-webkit-line-clamp:unset}.flow-device-name{display:block}.flow-device-model{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin-top:4px;font-size:.9em;font-weight:550;line-height:1.3;color:#48665b}
+.flow-pc-mark.flow-cluster-link{cursor:pointer;border:2px solid transparent;outline:0}.flow-pc-mark.flow-cluster-link:hover{background:#f3f6ff;border-color:#c9d5ff}.flow-pc-mark.flow-cluster-link:focus-visible{border-color:#3d5bdb;box-shadow:0 0 0 3px rgba(61,91,219,.18)}.flow-pc-mark.flow-cluster-link>svg{color:#4d6bd4}
     .flow-task{min-height:72px;display:grid;grid-template-columns:56px minmax(80px,1fr) auto;gap:12px;align-items:center;border:1px solid #d4e9de;border-radius:11px;background:#f2faf6;padding:10px 14px;color:#385745;font:inherit;text-align:left;position:relative}.flow-task:is(button){cursor:pointer}.flow-task>span{font-size:16px;font-weight:550;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.flow-photo{width:56px;height:56px;object-fit:cover;border-radius:8px;background:#dce8e1}.flow-type{width:40px;height:40px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.flow-task b{font:650 28px/1 ui-monospace,'SFMono-Regular',Consolas,monospace;letter-spacing:.2px;font-variant-numeric:tabular-nums;color:#237b58}.flow-task.working:before{content:'';position:absolute;left:-1px;top:14px;bottom:14px;width:3px;background:#71b391}.flow-packet{position:absolute;left:0;top:0;width:56px;height:56px;border:1.8px solid #849ae6;border-radius:11px;background:#f4f6ff;color:#4e6bd6;display:grid;place-items:center;offset-rotate:0deg;animation:flow-travel 1.2s linear infinite;pointer-events:none;z-index:1}.flow-packet .flow-type{width:36px;height:36px}@keyframes flow-travel{from{offset-distance:0%}to{offset-distance:100%}}@media(prefers-reduced-motion:reduce){.flow-packet{animation:none;offset-distance:65%}}
     .flow-empty{position:absolute;left:410px;top:170px;color:var(--muted);font-size:16px}
     @media(max-width:959px){.flow-view{padding:12px 16px;min-height:230px}.task-view-switch button{font-size:12px;padding:7px}.task-toolbar{padding:14px 16px 0}.task-heading{flex-wrap:wrap}.task-view-switch{margin-left:0}.clear-tasks{font-size:12px}.stats{overflow-x:auto}.stat{flex:0 0 auto;min-width:130px}.usage-stats{flex-basis:100%;margin-left:0;padding-left:0;border-left:0}}
@@ -274,10 +272,6 @@
     <header>
       <svg class="brand" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="12" fill="#3d5bdb"/><circle cx="11" cy="18" r="3" fill="#fff"/><circle cx="25" cy="12" r="3" fill="#fff"/><circle cx="25" cy="24" r="3" fill="#fff"/><path stroke="#fff" stroke-width="1.6" d="M13.6 16.8 22.4 13.2M13.6 19.2 22.4 22.8"/></svg>
       <div class="head"><h1 id="title">算力</h1><p id="connection" class="status wait" role="status">正在准备…</p></div>
-      <div class="app-tabs" role="tablist" aria-label="应用页面">
-        <button id="tabDashboard" class="app-tab active" type="button" role="tab">算力面板</button>
-        <button id="tabLlama" class="app-tab" type="button" role="tab">Llama 管理</button>
-      </div>
       <button id="openSettings" class="connect gear" type="button" aria-label="设置">⚙</button>
       <button id="connect" class="connect" type="button" disabled>启用近场</button>
     </header>
@@ -439,8 +433,6 @@
     const applyRouteAlgorithmButton=document.getElementById('applyRouteAlgorithm');
     const routeMessageView=document.getElementById('routeMessage');
     const llamaPanelView=document.getElementById('llamaPanel');
-    const tabDashboardButton=document.getElementById('tabDashboard');
-    const tabLlamaButton=document.getElementById('tabLlama');
     const closeLlamaPanelButton=document.getElementById('closeLlamaPanel');
     const llamaSelectedModelView=document.getElementById('llamaSelectedModel');
     const llamaImportModelButton=document.getElementById('llamaImportModel');
@@ -493,9 +485,9 @@
     }
     function openSettings(){if(!settingsView)return;settingsView.hidden=false;refreshModels();refreshUsage();}
     function closeSettings(){if(settingsView)settingsView.hidden=true;}
-    function setActiveTab(llama){
-      if(tabDashboardButton)tabDashboardButton.classList.toggle('active',!llama);
-      if(tabLlamaButton)tabLlamaButton.classList.toggle('active',llama);
+    function openLlamaManager(){
+      if(typeof window.chatBridge.openLlamaManager==='function')window.chatBridge.openLlamaManager();
+      else openLlamaPanel();
     }
     function refreshLlamaStatus(){
       if(!llamaPanelView||llamaPanelView.hidden||typeof window.chatBridge.llamaStatus!=='function')return;
@@ -512,23 +504,16 @@
       if(!llamaPanelView)return;
       if(settingsView)settingsView.hidden=true;
       llamaPanelView.hidden=false;
-      setActiveTab(true);
       refreshModels();
       refreshLlamaStatus();
     }
     function closeLlamaPanel(){
       if(llamaPanelView)llamaPanelView.hidden=true;
-      setActiveTab(false);
     }
     const openSettingsButton=document.getElementById('openSettings');
     const closeSettingsButton=document.getElementById('closeSettings');
     if(openSettingsButton)openSettingsButton.addEventListener('click',openSettings);
     if(closeSettingsButton)closeSettingsButton.addEventListener('click',closeSettings);
-    if(tabDashboardButton)tabDashboardButton.addEventListener('click',closeLlamaPanel);
-    if(tabLlamaButton)tabLlamaButton.addEventListener('click',()=>{
-      if(typeof window.chatBridge.openLlamaManager==='function')window.chatBridge.openLlamaManager();
-      else openLlamaPanel();
-    });
     if(closeLlamaPanelButton)closeLlamaPanelButton.addEventListener('click',closeLlamaPanel);
     function renderModelSettings(state){
       if(!state||!modelSettingsView)return;
@@ -1041,7 +1026,8 @@
           const memory='<div class="flow-memory" aria-label="内存 '+(mem===null?'未采集':mem+'%')+'"><i><em style="width:'+(mem===null?0:mem)+'%;background:'+(mem>50?'#e1b43b':'#279a73')+'"></em></i><span>内存<b>'+(mem===null?'—':Math.round(mem)+'%')+'</b></span></div>';
           const local=d.role==='self';
           return '<section class="flow-compute"'+(local?' data-local="true"':'')+' data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'">'+(local?'<span class="flow-local-label">本机</span>':'')+'<div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#'+(isLlamaCluster(d)?'flow-cluster':'flow-pc')+'"/></svg>'+(local&&!isLlamaCluster(d)?'<span class="flow-pc-local">本机</span>':'')+'</div>'+computeCardTitle(d)+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+((row.busy?'推理中':'在线')+'-'+computeKindLabel(d))+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
-        }).join('');
+        }).join('').replace(/<div class="flow-pc-mark"><svg([^>]*)><use href="#flow-cluster"\/><\/svg>/g,
+          '<div class="flow-pc-mark flow-cluster-link" role="button" tabindex="0" data-open-llama="1"><svg$1><use href="#flow-cluster"/></svg>');
         const packets=flights.filter(item=>targetY.has(item.executor)).map(item=>{
           const y=sourceY.get(item.origin||'local-source')||center;
           const route=sourcePath(y)+'L274 '+center+targetPath(targetY.get(item.executor)).replace(/^M274 [^H]+/,'');
@@ -1068,9 +1054,17 @@
     }
     if(viewSwitch)viewSwitch.addEventListener('click',event=>{const button=event.target.closest('[data-task-view]');if(button)setTaskView(button.getAttribute('data-task-view'));});
     if(flowView)flowView.addEventListener('click',event=>{
+      const llamaLink=event.target.closest('[data-open-llama]');
+      if(llamaLink){event.preventDefault();event.stopPropagation();openLlamaManager();return;}
       const button=event.target.closest('[data-flow-detail],[data-flow-group]');if(!button)return;
       detailKey=button.getAttribute('data-flow-detail')||'';detailGroupKey=button.getAttribute('data-flow-group')||'';detailChildId=button.getAttribute('data-flow-child')||'';
       detailTab='output';detailTrigger=button;renderDetail(true);if(detailView)focusWithoutScroll(detailView.querySelector('[data-close]'));
+    });
+    if(flowView)flowView.addEventListener('keydown',event=>{
+      if(event.key!=='Enter'&&event.key!==' ')return;
+      const llamaLink=event.target.closest('[data-open-llama]');
+      if(!llamaLink)return;
+      event.preventDefault();event.stopPropagation();openLlamaManager();
     });
 
     let usageView={tasks:0,tokens:0,microYuan:0};
