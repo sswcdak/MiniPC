@@ -8,7 +8,7 @@
       "sourceFictional": true,
       "sourceHanCharacters": 2022,
       "sourceTotalCharacters": 2229,
-      "expectedOutput": "300～500字中文总结"
+      "expectedOutput": "100～200字中文总结"
     },
     {
       "id": "cat-analysis",
@@ -17,7 +17,7 @@
       "attachments": [
         "cat.jpg"
       ],
-      "expectedOutput": "200～400字中文图片分析"
+      "expectedOutput": "约100字图片描述和构图调整建议"
     },
     {
       "id": "coding",
