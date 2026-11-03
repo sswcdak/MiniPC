@@ -112,6 +112,7 @@ function allCalls(){return jobs.concat(remoteCalls);}
     function computeKindLabel(device){
       const caps=device&&device.capabilities;
       if(Array.isArray(caps)&&caps.length){
+        if(caps.includes('text')&&caps.includes('vision'))return '文本+图片';
         if(caps.includes('vision'))return '图片';
         if(caps.includes('text'))return '文本';
         return '类型待同步';
