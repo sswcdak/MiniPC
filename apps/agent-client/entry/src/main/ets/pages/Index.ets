@@ -530,9 +530,12 @@ struct Index {
 
   private refreshRoutingView(): void {
     this.deviceInfoPoller.poll(this.pageActive ? nearbyChannel.readyEpoch() : -1);
-    this.routingJson = this.routingStore.snapshot(inferenceClient.routingCalls(), nearbyChannel.selfLabel(),
-      nearbyChannel.localUid(), nearbyChannel.isConnected(), nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo(),
-      inferenceClient.clusterLoad().total);
+    const load = inferenceClient.clusterLoad();
+    const connected = nearbyChannel.isConnected();
+    const calls = inferenceClient.routingCalls();
+    this.routingJson = this.routingStore.snapshot(calls, nearbyChannel.selfLabel(),
+      nearbyChannel.localUid(), connected, nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo(), load.total);
+    this.clusterSummary = this.routingStore.summary(load, connected, calls);
   }
 
   private initializeTabletSessions(): void {
@@ -695,9 +698,6 @@ struct Index {
   private refreshClusterSummary(): void {
     this.refreshRoutingView();
     this.drainTaskQueue();
-    const load = inferenceClient.clusterLoad();
-    this.clusterSummary = load.total > 0 ? '算力 ' + load.total + ' 台 · 空闲 ' + load.idle + ' 台' :
-      (nearbyChannel.isConnected() ? '已连接 · 检查模型' : '等待算力连接');
   }
 
   private async drainTaskQueue(): Promise<void> {

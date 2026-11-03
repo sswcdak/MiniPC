@@ -1,4 +1,4 @@
-import { DeviceInfoEntry, RoutingCall, WireMessage } from '../protocol/ChatProtocol';
+import { ClusterInfo, DeviceInfoEntry, RoutingCall, WireMessage } from '../protocol/ChatProtocol';
 
 interface RouteDevice {
   id: string; name: string; role: string; ready: boolean; jobs: number;
@@ -96,6 +96,34 @@ export class TaskRoutingStore {
     }
   }
   clear(): void { this.roster = []; this.epoch = -1; this.hasRoster = false; this.flows.clear(); this.revisions.clear(); }
+  summary(load: ClusterInfo, connected: boolean, calls: RoutingCall[] = []): string {
+    if (!connected) { return '等待算力连接'; }
+    // infer.status describes text execution capacity, not physical membership:
+    // vision-only nodes and distributed followers still belong in the graph.
+    const online = this.hasRoster ? this.roster.filter((device: DeviceInfoEntry): boolean =>
+      device.role !== 'chat' && device.ready !== false).length : 0;
+    const inventory = online > 0 ? '在线' + online + '台，' : '';
+    const vision = this.roster.filter((device: DeviceInfoEntry): boolean =>
+      device.role !== 'chat' && device.ready !== false && (device.capabilities || []).includes('vision'));
+    const visionIdle = vision.filter((device: DeviceInfoEntry): boolean => !this.busyForSummary(device, calls)).length;
+    return inventory + '文本' + load.idle + '/' + load.total + '台，' +
+      (this.hasRoster ? '多模态' + visionIdle + '/' + vision.length + '台' : '多模态待同步');
+  }
+  private busyForSummary(device: DeviceInfoEntry, calls: RoutingCall[]): boolean {
+    if ((device.modelRequests ?? 0) > 0) { return true; }
+    const id = device.deviceUid || device.id || '';
+    const label = device.slot !== undefined && device.slot > 0 ? '算力设备' + device.slot : device.name || '';
+    if (label.length > 0 && calls.some((call: RoutingCall): boolean =>
+      call.phase === 'running' && call.device === label)) { return true; }
+    for (const entry of this.flows.values()) {
+      const notice = entry.notice;
+      if (notice.phase !== 'running' || notice.executionBackend === 'cloud' ||
+        Date.now() - entry.receivedAt > 600000) { continue; }
+      if (notice.executorId ? (id.length > 0 && notice.executorId === id) :
+        (label.length > 0 && notice.source === label)) { return true; }
+    }
+    return false;
+  }
   snapshot(calls: RoutingCall[], selfLabel: string, selfUid: string, connected: boolean, readyEpoch: number, connectedHub: DeviceInfoEntry | null = null, reportedTotal: number = 0): string {
     if (!connected || (this.epoch >= 0 && this.epoch !== readyEpoch)) { this.clear(); }
     const devices: RouteDevice[] = this.roster.map((device: DeviceInfoEntry, index: number): RouteDevice => ({

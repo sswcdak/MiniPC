@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const {transpile} = require('../../../../tests/ets-harness.cjs');
+const {transpile, transpileSource} = require('../../../../tests/ets-harness.cjs');
 const root = path.resolve(__dirname, '../../entry/src/main');
 const box = {exports: {}, require: () => ({}), Date, JSON, Map, Set, Math, Number};
 vm.runInNewContext(transpile(path.join(root, 'ets/ui/TaskRoutingStore.ets')), box);
@@ -75,3 +75,65 @@ markup = elements.collaboration.innerHTML;
 assert(!markup.includes('is-pending'));
 assert(markup.includes('算力设备2-Qwen-VL'));
 console.log('PASS tablet roster fallback: missing membership, count changes, bounds, accepted executors, authoritative replacement, reconnect, disconnect and actual HTML rendering');
+
+// The cluster load drives text admission. A third vision-only device belongs in
+// the inventory without increasing text concurrency or being counted as busy.
+const summaryStore = new TaskRoutingStore();
+const textLoad = {idle: 2, total: 2};
+assert.equal(summaryStore.summary(textLoad, false), '等待算力连接');
+assert.equal(summaryStore.summary(textLoad, true), '文本2/2台，多模态待同步',
+  'a text capacity report alone cannot establish the complete device inventory');
+const visionHub = {...hub, capabilities: ['vision']};
+const llamaWorker = {...worker, capabilities: ['text'], inferenceBackend: 'llama.cpp'};
+const textWorker = {id: 'text', role: 'compute', slot: 3, ready: true, capabilities: ['text']};
+summaryStore.receive({type: 'deviceInfoSync', devices: [visionHub, llamaWorker, textWorker,
+  {id: 'chat', role: 'chat', ready: true}]}, 7, hub);
+assert.equal(summaryStore.summary(textLoad, true), '在线3台，文本2/2台，多模态1/1台');
+const visionCall = {...call, device: '算力设备1', image: 'image'};
+assert.equal(summaryStore.summary(textLoad, true, [visionCall]), '在线3台，文本2/2台，多模态0/1台');
+assert.equal(summaryStore.summary(textLoad, true, [{...visionCall, phase: 'queued'}]),
+  '在线3台，文本2/2台，多模态1/1台', 'an unassigned queued task does not consume a vision node');
+const flow = {key: 'vision-task', revision: 1, kind: 'image', phase: 'running',
+  source: '算力设备1', origin: '聊天设备2', executorId: 'hub', elapsed: 1};
+summaryStore.receiveFlow({type: 'infer.flow', text: JSON.stringify(flow)});
+assert.equal(summaryStore.summary(textLoad, true), '在线3台，文本2/2台，多模态0/1台',
+  'another chat client\'s task updates multimodal idle count immediately');
+summaryStore.receiveFlow({type: 'infer.flow', text: JSON.stringify({...flow, revision: 2, phase: 'cleared'})});
+assert.equal(summaryStore.summary(textLoad, true), '在线3台，文本2/2台，多模态1/1台');
+summaryStore.receiveFlow({type: 'infer.flow', text: JSON.stringify({...flow, revision: 3, executionBackend: 'cloud'})});
+assert.equal(summaryStore.summary(textLoad, true), '在线3台，文本2/2台，多模态1/1台',
+  'cloud execution does not occupy the local multimodal device');
+summaryStore.receiveFlow({type: 'infer.flow', text: JSON.stringify({...flow, revision: 4, phase: 'cleared'})});
+summaryStore.receive({type: 'deviceInfoSync', devices: [{...visionHub, modelRequests: 1}, llamaWorker, textWorker]}, 7, hub);
+assert.equal(summaryStore.summary(textLoad, true), '在线3台，文本2/2台，多模态0/1台');
+summaryStore.receive({type: 'deviceInfoSync', devices: [{...visionHub, modelRequests: 0}, llamaWorker, textWorker]}, 7, hub);
+assert.equal(summaryStore.summary({idle: 1, total: 2}, true), '在线3台，文本1/2台，多模态1/1台');
+assert.equal(summaryStore.summary({idle: 0, total: 0}, true), '在线3台，文本0/0台，多模态1/1台');
+summaryStore.receive({type: 'deviceInfoSync', devices: [visionHub, textWorker]}, 7, hub);
+assert.equal(summaryStore.summary({idle: 1, total: 1}, true), '在线2台，文本1/1台，多模态1/1台');
+summaryStore.receive({type: 'deviceInfoSync', devices: [visionHub, {...textWorker, ready: false}]}, 7, hub);
+assert.equal(summaryStore.summary({idle: 0, total: 0}, true), '在线1台，文本0/0台，多模态1/1台');
+summaryStore.clear();
+assert.equal(summaryStore.summary(textLoad, true), '文本2/2台，多模态待同步', 'reconnect drops the previous inventory');
+console.log('PASS tablet summary: inventory versus text capacity, busy work, no text model, membership changes and reconnect');
+
+// Run the page's real refresh path: receiving a roster must refresh the native
+// header even if infer.status still reports exactly the same text capacity.
+const pageSource = fs.readFileSync(path.join(root, 'ets/pages/Index.ets'), 'utf8');
+const refreshStart = pageSource.indexOf('  private refreshRoutingView(');
+const refreshEnd = pageSource.indexOf('\n  }', refreshStart) + 4;
+let connected = true;
+const pageBox = {exports: {}, nearbyChannel: {readyEpoch: () => connected ? 7 : -1,
+  isConnected: () => connected, connectedComputeInfo: () => hub, selfLabel: () => '聊天设备1', localUid: () => 'chat'},
+  inferenceClient: {clusterLoad: () => textLoad, routingCalls: () => []}};
+vm.runInNewContext(transpileSource('class Page {' + pageSource.slice(refreshStart, refreshEnd) + '} exports.Page=Page;'), pageBox);
+const page = new pageBox.exports.Page();
+page.pageActive = true; page.routingStore = summaryStore; page.deviceInfoPoller = {poll() {}};
+summaryStore.receive({type: 'deviceInfoSync', devices: [visionHub, llamaWorker, textWorker]}, 7, hub);
+page.refreshRoutingView();
+assert.equal(page.clusterSummary, '在线3台，文本2/2台，多模态1/1台');
+assert.equal(computes(JSON.parse(page.routingJson)).length, 3);
+connected = false; page.refreshRoutingView();
+assert.equal(page.clusterSummary, '等待算力连接');
+assert.equal(computes(JSON.parse(page.routingJson)).length, 0);
+console.log('PASS tablet native header and routing cards refresh from the same roster, including disconnect');
