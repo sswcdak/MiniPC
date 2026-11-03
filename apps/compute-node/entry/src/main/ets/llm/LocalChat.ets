@@ -295,7 +295,7 @@ export class LocalChat {
         const runtimeOptions = llamaRuntimeOptions(this.filesDir, managerConfig, contextSize, localEthernetIp());
         distributed = runtimeOptions.distRanks > 1;
         if (managerConfig !== null && runtimeOptions.distRanks > 1 && runtimeOptions.distRank === 0) {
-          PeerPresenceService.requestStart(managerConfig.peerIp, managerConfig.distMode).then(
+          PeerPresenceService.requestStart(managerConfig.peerIp, managerConfig.distMode, managerConfig).then(
             (started: boolean): void => {
               hilog.info(0, 'NearbyChat', 'distributed peer preload peer=%{public}s started=%{public}s',
                 managerConfig.peerIp, String(started));
@@ -314,8 +314,14 @@ export class LocalChat {
       if (plan !== undefined) this.reuse.finish(plan, false);
       return '无法启动模型，请确认模型文件已部署。';
     }
+    if (nativeId === -2) {
+      if (plan !== undefined) this.reuse.finish(plan, false);
+      hilog.error(0, 'NearbyChat', 'native llama start rejected: model path unavailable');
+      return '所选模型文件不存在或无法读取，请在 Llama 管理中重新选择模型。';
+    }
     if (nativeId <= 0) {
       if (plan !== undefined) this.reuse.finish(plan, false);
+      hilog.warn(0, 'NearbyChat', 'native llama start rejected: worker busy');
       return '模型繁忙，请稍后再发。';
     }
     this.jobs.push({

@@ -21,6 +21,8 @@ import { LocalLlmTransport } from '../llm/LlmTransport';
 import { VlLlmTransport } from '../llm/VlLlmTransport';
 import { QwenVlManager } from '../llm/QwenVlManager';
 import { isVlLayout, modelSelection, readyModelDirs, saveModelSelection } from '../llm/ModelRegistry';
+import { applyLlamaRemoteRequest } from '../llm/LlamaRemoteState';
+import { llamaPeerStats } from '../llm/LlamaPeerStatsService';
 import { outputSettings, saveOutputSettings } from '../llm/OutputSettings';
 import {
   UsageLedger, applyUsageSettings, emptyUsage, loadUsage, recordFinishedTask, recordLocalCall,
@@ -165,6 +167,7 @@ struct Index {
     if (IS_SERVER) {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       this.filesDir = context.getApplicationContext().filesDir;
+      llamaPeerStats.start(this.filesDir);
       this.usage = loadUsage(this.filesDir);
       // Dirty/legacy values are normalized to 'least_load' inside routerSettings().
       this.routeMode = routerSettings(this.filesDir).algorithm;
@@ -243,9 +246,11 @@ struct Index {
     this.model?.close();
     this.channel.disconnect();
     this.channel.unsubscribe();
+    llamaPeerStats.stop();
   }
 
   onPageShow(): void {
+    llamaPeerStats.refreshConfig();
     if (this.pageReady && this.autoConnect) this.ensureCollaborationReady(this.connectManual);
   }
 
@@ -1741,6 +1746,10 @@ struct Index {
 
   private receive(message: WireMessage, epoch: number): void {
     if (IS_SERVER) {
+      if (message.type === 'llama.manage' && message.requestId) {
+        this.handleLlamaManage(message, epoch);
+        return;
+      }
       if (message.type.indexOf('infer.') === 0) {
         this.receiveInference(message, epoch);
         return;
@@ -1787,6 +1796,18 @@ struct Index {
       this.finish(message.error || '请求失败，请点击输入框重试。', true);
       this.showConnection();
     }
+  }
+
+  private handleLlamaManage(message: WireMessage, epoch: number): void {
+    const peer = this.channel.peerInfos().find((item) => item.epoch === epoch);
+    if (!this.isComputeHub() || peer?.ready !== true || peer.role !== 'chat') {
+      return;
+    }
+    const runtime = this.model?.llamaStatusJson() ?? '{"state":"idle"}';
+    llamaPeerStats.refreshConfig();
+    const state = applyLlamaRemoteRequest(this.filesDir, runtime, message.text || '{"action":"get"}');
+    this.channel.send({ type: 'llama.manage', requestId: message.requestId, text: state }, epoch).catch(
+      (_error: Error): void => {});
   }
 
   private remember(): void {

@@ -41,6 +41,9 @@
 @keyframes compute-breathe{0%,100%{background-color:#F8FBFF;border-color:#BDCEE4;box-shadow:0 4px 14px #3B61951A,0 1px 3px #3B61950D}50%{background-color:#EFF5FF;border-color:#A9C1E1;box-shadow:0 7px 20px #3B619526,0 2px 5px #3B619512}}
 @media(max-width:480px){.flow-labels{font-size:calc(13px / var(--flow-scale,1))}}
 @media(prefers-reduced-motion:reduce){.flow-compute.is-computing{animation:none}}
+    .flow-pc-mark[data-open-llama]{cursor:pointer;border:2px solid transparent;border-radius:12px;outline:0}
+    .flow-pc-mark[data-open-llama]:hover{background:#f3f6ff;border-color:#c9d5ff}
+    .flow-pc-mark[data-open-llama]:focus-visible{border-color:#3d5bdb;box-shadow:0 0 0 3px rgba(61,91,219,.18)}
 </style></head><body><svg style="position:absolute;width:0;height:0" aria-hidden="true"><defs><symbol id="flow-phone" viewBox="0 0 58 87"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="46" height="81" rx="8" fill="#fff"/><rect x="10" y="8" width="38" height="65" rx="3" stroke="#d3d8e1" fill="#fbfcff"/><path d="M24 5h10M24 78h10" stroke-linecap="round"/></g></symbol>
 <symbol id="flow-cluster" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="8" width="30" height="48" rx="4"/><rect x="40" y="8" width="30" height="48" rx="4"/><rect x="76" y="8" width="30" height="48" rx="4"/><path d="M19 56v12h72V56M55 56v19" fill="none"/></g><g fill="none" stroke="#bdc5cf" stroke-width="1.3"><path d="M10 21h18M10 33h18M10 45h18M46 21h18M46 33h18M46 45h18M82 21h18M82 33h18M82 45h18"/></g><g fill="#279a73"><circle cx="13" cy="15" r="1.6"/><circle cx="49" cy="15" r="1.6"/><circle cx="85" cy="15" r="1.6"/></g><circle cx="55" cy="75" r="3" fill="white" stroke="currentColor" stroke-width="1.8"/></symbol>
 <symbol id="flow-pc" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="16" y="4" width="78" height="52" rx="4"/><rect x="21" y="9" width="68" height="41" rx="1.5" stroke="#cbd1da" stroke-width="1.2" fill="#fcfdfd"/><path d="M16 57h78l12 17q1 4-4 4H8q-5 0-4-4z"/><path d="M4 73h102M26 61h58l5 7H22z" stroke="#bdc5cf" stroke-width="1.1"/><path d="M46 71h18l3 5H43z" stroke="#b2bac5" stroke-width="1"/><path d="M34 61l-2 7m15-7-1 7m15-7 1 7m13-7 2 7" stroke="#d1d6de" stroke-width="1"/></g></symbol>
@@ -199,6 +202,18 @@ function allCalls(){return jobs.concat(remoteCalls);}
       return '<'+(action?'button':'div')+' class="flow-task working" data-row-key="'+esc(item.key)+'"'+
         (action?' type="button"'+action:'')+' aria-label="'+esc(label)+'">'+media+'<span>'+(item.model?'<span class="flow-question">'+esc(title)+'</span><small class="flow-model">'+esc(item.model)+'</small>':esc(title))+'</span><b data-flow-clock="'+esc(item.key)+'">'+flowClock(Date.now()-item.at)+'</b></'+(action?'button':'div')+'>';
     }
+    function decorateClusterLinks(){
+      if(!flowView||!flowView.querySelectorAll)return;
+      for(const section of flowView.querySelectorAll('.flow-compute')){
+        const mark=section.querySelector('.flow-pc-mark');
+        if(!mark||!section.querySelector('use[href="#flow-cluster"]'))continue;
+        const key=section.getAttribute('data-row-key')||'';
+        mark.setAttribute('data-open-llama',key.indexOf('compute:')===0?key.substring(8):'');
+        mark.setAttribute('role','button');
+        mark.setAttribute('tabindex','0');
+        mark.setAttribute('aria-label','打开 Llama 管理');
+      }
+    }
     function renderFlow(){
       if(!flowView)return;
       flowItems=flowData();
@@ -248,6 +263,7 @@ function allCalls(){return jobs.concat(remoteCalls);}
         }).join('');
         renderMarkup(flowView,'<div class="flow-labels" data-row-key="labels"><span>任务发起</span><span>路由分发</span><span>算力执行</span></div><div class="flow-scene" data-row-key="scene" style="width:'+width+'px;height:'+height+'px">'+wires+phones+router+boxes+packets+(!computers.length?'<div class="flow-empty">等待算力设备上线</div>':'')+'</div>');
       }
+      decorateClusterLinks();
       updateFlowClocks();
     }
     function updateFlowClocks(){
@@ -281,10 +297,25 @@ function fitFlow(){
 window.onNativeEvent=function(event){devices=event.devices||[];jobs=event.jobs||[];groups=[];queuedCalls=event.queuedCalls||[];mirroredCalls=event.flowCalls||[];renderFlow();fitFlow();};
 window.addEventListener('resize',()=>{flowSignature='';renderFlow();fitFlow();});
 if(typeof ResizeObserver!=='undefined')new ResizeObserver(fitFlow).observe(viewport);
-flowView.addEventListener('click',event=>{const button=event.target.closest('[data-flow-detail]');if(!button)return;
+flowView.addEventListener('click',event=>{
+ const llama=event.target.closest('[data-open-llama]');
+ if(llama){
+  event.preventDefault();event.stopPropagation();
+  if(window.routingBridge&&typeof window.routingBridge.openLlamaManager==='function')
+   window.routingBridge.openLlamaManager(llama.getAttribute('data-open-llama')||'');
+  return;
+ }
+ const button=event.target.closest('[data-flow-detail]');if(!button)return;
  const job=jobs.find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
  document.getElementById('detailText').textContent=(job.question||'推理请求')+'\n执行设备：'+(job.source||'等待分派')+'\n状态：'+(job.phase||'running');
  document.getElementById('detail').hidden=false;
+});
+flowView.addEventListener('keydown',event=>{
+ if(event.key!=='Enter'&&event.key!==' ')return;
+ const llama=event.target.closest('[data-open-llama]');if(!llama)return;
+ event.preventDefault();event.stopPropagation();
+ if(window.routingBridge&&typeof window.routingBridge.openLlamaManager==='function')
+  window.routingBridge.openLlamaManager(llama.getAttribute('data-open-llama')||'');
 });
 document.getElementById('closeDetail').addEventListener('click',()=>document.getElementById('detail').hidden=true);
 setInterval(()=>{renderFlow();fitFlow();},500);renderFlow();fitFlow();

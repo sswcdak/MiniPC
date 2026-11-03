@@ -47,6 +47,7 @@ import { TaskProgress, TaskProgressPhase, taskProgressActive } from '../model/Ta
 import { TaskRoutingView } from '../ui/TaskRoutingView';
 import { TaskRoutingStore } from '../ui/TaskRoutingStore';
 import { DeviceInfoPoller } from '../ui/DeviceInfoPoller';
+import { TabletLlamaManagerView } from '../ui/TabletLlamaManagerView';
 import { DEFAULT_QUICK_INPUTS, loadTabletPreferences, saveTabletPreferences } from '../model/TabletPreferences';
 import { ResultMessage, ResultTurn, resultTurns } from '../ui/ResultOverview';
 import { ConversationTurnView } from '../ui/ConversationTurnView';
@@ -336,6 +337,9 @@ struct Index {
   @State agentEnabled: boolean = false;
   @State chatMode: ChatMode = 'chat';
   @State settingsVisible: boolean = false;
+  @State llamaManagerVisible: boolean = false;
+  @State llamaManagerDeviceId: string = '';
+  @State llamaManagerStateJson: string = '{}';
   @State modelStatus: string = '远程算力';
   @State titleText: string = '聊天';
   @State statusText: string = '正在寻找算力设备…';
@@ -399,6 +403,9 @@ struct Index {
   private parallelViews: SubtaskView[] = [];
   private stopRequested: boolean = false;
   private remoteRunGeneration: number = 0;
+  private llamaManagerRequestId: string = '';
+  private llamaManagerRequestDeadline: number = 0;
+  private llamaManagerRefreshTimer: number = -1;
   private pageActive: boolean = false;
   private chatBubbleTextWidthVp: number = 280;
   private collaborationKeepsScreenOn: boolean = false;
@@ -495,6 +502,14 @@ struct Index {
     });
     nearbyChannel.subscribe((message: WireMessage, epoch: number): void => {
       if (!this.pageActive || epoch !== nearbyChannel.readyEpoch()) { return; }
+      if (message.type === 'llama.manage') {
+        if (message.requestId === this.llamaManagerRequestId) {
+          this.llamaManagerStateJson = message.text || '{}';
+          this.llamaManagerRequestId = '';
+          this.llamaManagerRequestDeadline = 0;
+        }
+        return;
+      }
       this.deviceInfoPoller.acknowledge(message, epoch);
       this.routingStore.receive(message, epoch, nearbyChannel.connectedComputeInfo());
       this.refreshRoutingView();
@@ -517,6 +532,9 @@ struct Index {
     }, (connected: boolean, _epoch: number): void => {
       if (!connected) { this.routingStore.clear(); this.deviceInfoPoller.clear(); }
       if (this.pageActive) { this.refreshRoutingView(); }
+      if (connected && this.llamaManagerVisible) {
+        this.requestLlamaManagerState();
+      }
     });
     this.refreshRoutingView();
   }
@@ -536,6 +554,78 @@ struct Index {
     this.routingJson = this.routingStore.snapshot(calls, nearbyChannel.selfLabel(),
       nearbyChannel.localUid(), connected, nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo(), load.total);
     this.clusterSummary = this.routingStore.summary(load, connected, calls);
+  }
+
+  private openTabletLlamaManager(deviceId: string): void {
+    this.llamaManagerDeviceId = deviceId;
+    this.llamaManagerVisible = true;
+    this.requestLlamaManagerState();
+    this.startLlamaManagerRefresh();
+  }
+
+  private closeTabletLlamaManager(): void {
+    this.llamaManagerVisible = false;
+    this.stopLlamaManagerRefresh();
+  }
+
+  private startLlamaManagerRefresh(): void {
+    if (this.llamaManagerRefreshTimer >= 0) {
+      return;
+    }
+    this.llamaManagerRefreshTimer = setInterval((): void => {
+      if (this.llamaManagerVisible) {
+        this.requestLlamaManagerState();
+      }
+    }, 3000);
+  }
+
+  private stopLlamaManagerRefresh(): void {
+    if (this.llamaManagerRefreshTimer >= 0) {
+      clearInterval(this.llamaManagerRefreshTimer);
+      this.llamaManagerRefreshTimer = -1;
+    }
+  }
+
+  private requestLlamaManagerState(): void {
+    const epoch = nearbyChannel.readyEpoch();
+    if (!nearbyChannel.isConnected() || epoch < 0) {
+      return;
+    }
+    if (this.llamaManagerRequestId.length > 0 && Date.now() < this.llamaManagerRequestDeadline) {
+      return;
+    }
+    this.llamaManagerRequestId = 'llama-manage-get-' + String(Date.now());
+    this.llamaManagerRequestDeadline = Date.now() + 2500;
+    nearbyChannel.send({
+      type: 'llama.manage',
+      requestId: this.llamaManagerRequestId,
+      text: '{"action":"get"}'
+    }, epoch).then((sent: boolean): void => {
+      if (!sent) {
+        this.llamaManagerRequestId = '';
+        this.llamaManagerRequestDeadline = 0;
+      }
+    }).catch((_error: Error): void => {
+      this.llamaManagerRequestId = '';
+      this.llamaManagerRequestDeadline = 0;
+    });
+  }
+
+  private saveLlamaManagerConfig(configJson: string): void {
+    const epoch = nearbyChannel.readyEpoch();
+    if (!nearbyChannel.isConnected() || epoch < 0) {
+      this.llamaManagerStateJson =
+        '{"ok":false,"message":"算力集群未连接，配置未保存","models":[],"runtime":{"state":"idle"}}';
+      return;
+    }
+    this.llamaManagerRequestId = 'llama-manage-save-' + String(Date.now());
+    nearbyChannel.send({
+      type: 'llama.manage',
+      requestId: this.llamaManagerRequestId,
+      text: '{"action":"save","config":' + configJson + '}'
+    }, epoch).catch((_error: Error): void => {
+      this.llamaManagerRequestId = '';
+    });
   }
 
   private initializeTabletSessions(): void {
@@ -953,6 +1043,7 @@ struct Index {
 
   aboutToDisappear(): void {
     this.sessionDrawerVisible = false;
+    this.stopLlamaManagerRefresh();
     this.stopRoutingView();
     this.cancelAllConcurrentTasks();
     clearInterval(this.clusterTimer);
@@ -985,6 +1076,10 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.llamaManagerVisible) {
+      this.closeTabletLlamaManager();
+      return true;
+    }
     if (this.sessionDrawerVisible) {
       this.closeSessionDrawer();
       return true;
@@ -1001,14 +1096,25 @@ struct Index {
       Column() {
         if (this.settingsVisible) { this.settingsPage(); } else { this.chatPage(); }
       }.width('100%').height('100%')
-        .enabled(!this.sessionDrawerVisible)
-        .accessibilityLevel(this.sessionDrawerVisible ? 'no-hide-descendants' : 'auto')
+        .enabled(!this.sessionDrawerVisible && !this.llamaManagerVisible)
+        .accessibilityLevel(this.sessionDrawerVisible || this.llamaManagerVisible ? 'no-hide-descendants' : 'auto')
       if (this.sessionDrawerVisible) {
         Column().width('100%').height('100%').backgroundColor('#5711241F')
           .accessibilityText('关闭会话列表').accessibilityLevel('yes')
           .onClick(() => { this.closeSessionDrawer(); })
           .transition(TransitionEffect.OPACITY)
         this.sessionSidebar()
+      }
+      if (this.llamaManagerVisible) {
+        TabletLlamaManagerView({
+          eventJson: this.routingJson,
+          stateJson: this.llamaManagerStateJson,
+          refreshRevision: this.routingRevision,
+          focusDeviceId: this.llamaManagerDeviceId,
+          onClose: (): void => this.closeTabletLlamaManager(),
+          onRefresh: (): void => this.requestLlamaManagerState(),
+          onSaveConfig: (configJson: string): void => this.saveLlamaManagerConfig(configJson)
+        }).width('100%').height('100%')
       }
     }.width('100%').height('100%').backgroundColor('#EEF6F3')
       .onAreaChange((_old: Area, area: Area) => {
@@ -1249,7 +1355,11 @@ struct Index {
     } else {
       Column({ space: 8 }) {
         this.routingHeader()
-        TaskRoutingView({ eventJson: this.routingJson, refreshRevision: this.routingRevision }).width('100%').layoutWeight(1)
+        TaskRoutingView({
+          eventJson: this.routingJson,
+          refreshRevision: this.routingRevision,
+          onOpenLlamaManager: (deviceId: string): void => this.openTabletLlamaManager(deviceId)
+        }).width('100%').layoutWeight(1)
       }.width('100%').layoutWeight(5).constraintSize({ minHeight: 120 }).padding(12).backgroundColor(Color.White).borderRadius(16)
     }
   }

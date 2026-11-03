@@ -1,11 +1,25 @@
 import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
+class RoutingBridge {
+  private readonly openHandler: (deviceId: string) => void;
+
+  constructor(openHandler: (deviceId: string) => void) {
+    this.openHandler = openHandler;
+  }
+
+  openLlamaManager(deviceId: string): void {
+    this.openHandler(String(deviceId || ''));
+  }
+}
+
 @Component
 export struct TaskRoutingView {
   @Prop @Watch('refresh') eventJson: string = '{}';
   @Prop @Watch('refresh') refreshRevision: number = 0;
+  onOpenLlamaManager: (deviceId: string) => void = (_deviceId: string): void => {};
   private controller: webview.WebviewController = new webview.WebviewController();
+  private bridge: RoutingBridge = new RoutingBridge((deviceId: string): void => this.onOpenLlamaManager(deviceId));
   private loaded: boolean = false;
   private applying: boolean = false;
   private pending: boolean = false;
@@ -62,6 +76,12 @@ export struct TaskRoutingView {
     Web({ src: $rawfile('task-routing.html'), controller: this.controller })
       .javaScriptAccess(true)
       .domStorageAccess(false)
+      .javaScriptProxy({
+        object: this.bridge,
+        name: 'routingBridge',
+        methodList: ['openLlamaManager'],
+        controller: this.controller
+      })
       .onPageEnd(() => { this.pageReady(); })
       .width('100%').height('100%')
   }
