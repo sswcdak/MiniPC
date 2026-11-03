@@ -68,6 +68,12 @@ interface TabletLlamaState {
 }
 
 const ORIGINAL_MODEL_MEMORY_BYTES: number = 45 * 1024 * 1024 * 1024;
+const OFFLOAD_HOST_A: string = '#3F786B';
+const OFFLOAD_HOST_B: string = '#70A26F';
+const OFFLOAD_FLASH: string = '#D79535';
+const OFFLOAD_MODEL: string = '#C77B61';
+const OFFLOAD_THREE_BARS: number[] = [0, 1, 2];
+const OFFLOAD_SIX_BARS: number[] = [0, 1, 2, 3, 4, 5];
 
 interface TabletLlamaPeer {
   online?: boolean;
@@ -215,7 +221,7 @@ export struct TabletLlamaManagerView {
       nodes.push({
         id: device.id,
         title: isPrimary ? '算力主节点' : '级联对端',
-        rankLabel: 'rank' + this.runtimeRank.toString(),
+        rankLabel: 'rank' + index.toString(),
         address: isPrimary ? '近场连接' : (this.peerIp.length > 0 ? this.peerIp : '协同地址待同步'),
         online: device.ready || (!isPrimary && this.peerOnline),
         model: device.model && device.model.length > 0 ? device.model :
@@ -232,7 +238,7 @@ export struct TabletLlamaManagerView {
       nodes.push({
         id: 'configured-peer:' + this.peerIp,
         title: '级联对端',
-        rankLabel: 'rank' + this.peerRank.toString(),
+        rankLabel: 'rank' + (this.peerRank > 0 ? this.peerRank : 1).toString(),
         address: this.peerIp,
         online: this.peerOnline,
         model: this.peerOnline ? '级联推理状态已同步' : '等待级联节点同步模型信息',
@@ -455,20 +461,56 @@ export struct TabletLlamaManagerView {
           Blank()
           Text('45 GB').fontSize(14).fontWeight(FontWeight.Medium).fontColor('#16332C')
         }
-        Stack({ alignContent: Alignment.Start }) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Text('15G')
+            .width(44)
+            .fontSize(9)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#A87612')
+            .textAlign(TextAlign.Center)
+            .position({ x: '27%', y: 0 })
+          Text('30G')
+            .width(44)
+            .fontSize(9)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#A87612')
+            .textAlign(TextAlign.Center)
+            .position({ x: '61%', y: 0 })
           Row()
             .width('100%')
             .height(15)
             .backgroundColor('#E8EEF1')
             .borderRadius(7.5)
+            .position({ x: 0, y: 18 })
           Row()
             .width('100%')
             .height(15)
             .backgroundColor('#91A7B5')
             .borderRadius(7.5)
+            .position({ x: 0, y: 18 })
+          Line()
+            .width(2)
+            .height(15)
+            .startPoint([0, 0])
+            .endPoint([0, 15])
+            .stroke('#D3A222')
+            .strokeWidth(2)
+            .strokeDashArray([3, 2])
+            .position({ x: '33.333%', y: 18 })
+            .zIndex(2)
+          Line()
+            .width(2)
+            .height(15)
+            .startPoint([0, 0])
+            .endPoint([0, 15])
+            .stroke('#D3A222')
+            .strokeWidth(2)
+            .strokeDashArray([3, 2])
+            .position({ x: '66.667%', y: 18 })
+            .zIndex(2)
         }
           .width('100%')
-          .height(15)
+          .height(33)
       }
       Column({ space: 6 }) {
         Row() {
@@ -518,9 +560,192 @@ export struct TabletLlamaManagerView {
           this.topologyConnector()
         }
       }, (node: TabletTopologyNode) => node.id + ':' + node.online.toString() + ':' + this.refreshRevision.toString())
-      if (this.topologyNodes().length > 0) {
-        this.memoryComparison()
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(Color.White)
+    .borderRadius(16)
+    .border({ width: 1, color: '#DDE8E4' })
+  }
+
+  @Builder
+  offloadTallBar(color: string) {
+    Row()
+      .width(12)
+      .height(52)
+      .backgroundColor(color)
+      .borderRadius({ topLeft: 3, topRight: 3 })
+  }
+
+  @Builder
+  offloadMiniBar(color: string) {
+    Row()
+      .width(9)
+      .height(30)
+      .backgroundColor(color)
+      .borderRadius({ topLeft: 2, topRight: 2 })
+  }
+
+  @Builder
+  offloadGapBar() {
+    Row()
+      .width(8)
+      .height(30)
+      .backgroundColor(Color.Transparent)
+      .border({ width: 1, color: OFFLOAD_MODEL, style: BorderStyle.Dashed })
+      .borderRadius({ topLeft: 2, topRight: 2 })
+  }
+
+  @Builder
+  offloadUnitContent(name: string, amount: string, color: string, background: string,
+    gap: boolean, barCount: number) {
+    Column({ space: 2 }) {
+      Text(name).fontSize(11).fontWeight(FontWeight.Bold).fontColor('#5E7069')
+      Text(amount).fontSize(11).fontWeight(FontWeight.Medium).fontColor('#435750')
+      Row({ space: 3 }) {
+        ForEach(barCount === 6 ? OFFLOAD_SIX_BARS : OFFLOAD_THREE_BARS, (index: number) => {
+          if (gap) {
+            this.offloadGapBar()
+          } else {
+            this.offloadMiniBar(color)
+          }
+        }, (index: number) => index.toString())
       }
+      .height(30)
+      .alignItems(VerticalAlign.Bottom)
+    }
+    .width(132)
+    .height(76)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(background)
+    .borderRadius(10)
+  }
+
+  @Builder
+  offloadUnit(name: string, amount: string, color: string, background: string,
+    gap: boolean, barCount: number) {
+    if (gap) {
+      Stack() {
+        this.offloadUnitContent(name, amount, color, background, gap, barCount)
+        Image($r('app.media.offload_gap_border'))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Fill)
+          .hitTestBehavior(HitTestMode.None)
+      }
+      .width(132)
+      .height(76)
+    } else {
+      this.offloadUnitContent(name, amount, color, background, gap, barCount)
+    }
+  }
+
+  @Builder
+  offloadPlus() {
+    Text('+')
+      .width(22)
+      .fontSize(20)
+      .fontWeight(FontWeight.Lighter)
+      .fontColor('#929B95')
+      .textAlign(TextAlign.Center)
+  }
+
+  @Builder
+  memoryOffloadSection() {
+    Column({ space: 10 }) {
+      Row() {
+        Text('内存卸载方案').fontSize(19).fontWeight(FontWeight.Bold).fontColor('#16332C')
+        Blank()
+        Text('45G 模型容量方案').fontSize(12).fontColor('#6B7F79')
+      }
+
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text('模型权重').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#16332C')
+          Text('所需内存').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#16332C')
+        }
+        .width(132)
+        .alignItems(HorizontalAlign.Start)
+        Row({ space: 12 }) {
+          Row({ space: 3 }) {
+            Text('45').fontSize(34).fontWeight(FontWeight.Bold).fontColor('#18211C')
+            Text('G').fontSize(12).fontWeight(FontWeight.Bold).fontColor('#6D756F')
+              .margin({ bottom: 6 })
+          }
+          .alignItems(VerticalAlign.Bottom)
+          Row({ space: 4 }) {
+            this.offloadTallBar(OFFLOAD_HOST_A)
+            this.offloadTallBar(OFFLOAD_HOST_A)
+            this.offloadTallBar(OFFLOAD_HOST_A)
+            this.offloadTallBar(OFFLOAD_HOST_B)
+            this.offloadTallBar(OFFLOAD_HOST_B)
+            this.offloadTallBar(OFFLOAD_HOST_B)
+            this.offloadTallBar(OFFLOAD_MODEL)
+            this.offloadTallBar(OFFLOAD_MODEL)
+            this.offloadTallBar(OFFLOAD_MODEL)
+          }
+          .height(52)
+          .alignItems(VerticalAlign.Bottom)
+        }
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor('#FBF6F3')
+      .borderRadius(12)
+
+      Row({ space: 12 }) {
+        Text('单机放不下').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#16332C')
+          .width(132)
+        Row({ space: 6 }) {
+          this.offloadUnit('主机 A', '可用 15G', OFFLOAD_HOST_A, '#EEF7F4', false, 3)
+          this.offloadPlus()
+          this.offloadUnit('容量缺口', '30G', OFFLOAD_MODEL, '#FBF4F1', true, 6)
+        }
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor('#F7F9F8')
+      .borderRadius(12)
+
+      Row({ space: 12 }) {
+        Text('双机放不下').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#16332C')
+          .width(132)
+        Row({ space: 5 }) {
+          this.offloadUnit('主机 A', '可用 15G', OFFLOAD_HOST_A, '#EEF7F4', false, 3)
+          this.offloadPlus()
+          this.offloadUnit('主机 B', '可用 15G', OFFLOAD_HOST_B, '#F1F8F0', false, 3)
+          this.offloadPlus()
+          this.offloadUnit('容量缺口', '15G', OFFLOAD_MODEL, '#FBF4F1', true, 3)
+        }
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor('#F5FAF6')
+      .borderRadius(12)
+
+      Row({ space: 12 }) {
+        Text('双机 + Flash').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#16332C')
+          .width(132)
+        Row({ space: 5 }) {
+          this.offloadUnit('主机 A', '可用 15G', OFFLOAD_HOST_A, '#EEF7F4', false, 3)
+          this.offloadPlus()
+          this.offloadUnit('主机 B', '可用 15G', OFFLOAD_HOST_B, '#F1F8F0', false, 3)
+          this.offloadPlus()
+          this.offloadUnit('Flash', '卸载 15G', OFFLOAD_FLASH, '#FCF6EC', false, 3)
+        }
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor('#FAF8F2')
+      .borderRadius(12)
     }
     .width('100%')
     .padding(16)
@@ -633,7 +858,7 @@ export struct TabletLlamaManagerView {
       Scroll() {
         Column({ space: 10 }) {
           this.topologySection()
-          this.configurationSection()
+          this.memoryOffloadSection()
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)

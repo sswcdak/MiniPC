@@ -311,7 +311,7 @@ struct Index {
   @State peerReady: boolean = false;
   private peerTs: number = 0;
   // 本机 llama-server 是否在跑：由 refreshPoolStats() 按日志新鲜度判定，供对端数据通道使用。
-  // 没在跑时对端拿到的 rss 只是本 App 的 PSS，不能当"推理内存"报出去。
+  // 本机和对端统一使用 native status 的 RSS，避免 PSS/RSS 混用造成数值不一致。
   private serving: boolean = false;
   private peerPolling: boolean = false;
   private peerFailCount: number = 0;   // 临时诊断
@@ -338,7 +338,7 @@ struct Index {
   @State memFreeBytes: number = 0;
   @State ramExperts: number = 0;
   @State diskExperts: number = 0;
-  @State appPssBytes: number = 0;
+  @State appRssBytes: number = 0;
   @State expertRamBytes: number = 0;
   @State diskWeightBytes: number = 0;
   @State poolHitPct: number = -1;
@@ -797,18 +797,10 @@ struct Index {
   refreshMem(): void {
     try {
       const mi: hidebug.SystemMemInfo = hidebug.getSystemMemInfo();
-      // totalMem / availableMem 单位为 KB，统一换算成字节，与 appPssBytes 保持一致
+      // totalMem / availableMem 单位为 KB，统一换算成字节。
       this.memTotalBytes = Number(mi.totalMem) * 1024;
       this.memFreeBytes = Number(mi.availableMem) * 1024;
-    } catch (e) {
-    }
-    try {
-      // getPss() 返回本进程 PSS（KB），反映 App 实际占用的物理内存
-      const pss = Number(hidebug.getPss());
-      if (pss > 0) {
-        this.appPssBytes = pss * 1024;
-      }
-      hilog.info(domain, TAG, `refreshMem: pss=${pss} appPss=${this.appPssBytes} memTotal=${this.memTotalBytes}`);
+      hilog.info(domain, TAG, `refreshMem: rss=${this.appRssBytes} memTotal=${this.memTotalBytes}`);
     } catch (e) {
       hilog.error(domain, TAG, `refreshMem err: ${e}`);
     }
@@ -817,7 +809,7 @@ struct Index {
     if (this.memTotalBytes <= 0) {
       return 0;
     }
-    const p = 100.0 * this.appPssBytes / this.memTotalBytes;
+    const p = 100.0 * this.appRssBytes / this.memTotalBytes;
     return p > 100 ? 100 : (p < 0 ? 0 : p);
   }
   fmtGB(bytes: number): string {
@@ -864,12 +856,12 @@ struct Index {
     try {
       const native = JSON.parse(llamaProbe.status()) as Record<string, Object>;
       const nativeState = typeof native['state'] === 'string' ? native['state'] as string : '';
+      const rss = Number(native['rss']);
+      if (rss > 0) this.appRssBytes = rss;
       if (nativeState === 'ready' || nativeState === 'busy' || nativeState === 'loading') {
-        const rss = Number(native['rss']);
         const expertRam = Number(native['expertRam']);
         const hit = Number(native['hit']);
         const disk = Number(native['disk']);
-        if (rss > 0) this.appPssBytes = rss;
         this.expertRamBytes = expertRam > 0 ? expertRam : 0;
         this.diskWeightBytes = disk > 0 ? disk : 0;
         this.poolHitPct = Number.isFinite(hit) && hit >= 0 ? hit : -1;
@@ -1004,9 +996,9 @@ struct Index {
         dm = lastMisses - baseMisses;
       }
       const haveHit = dh + dm > 0;
-      // App 内存：优先用 native 监控线程写的推理进程 RSS（llama-server 子进程才是真正占内存的进程）
+      // native 监控线程写出的 RSS 同样用于空闲状态的基线内存。
       if (rssKb > 0) {
-        this.appPssBytes = rssKb * 1024;
+        this.appRssBytes = rssKb * 1024;
       }
 
       if (total > 0) {
@@ -1055,7 +1047,7 @@ struct Index {
       rank: this.roleIsMaster ? 0 : 1,
       serving: this.serving ? 1 : 0,
       ready: this.loadDone ? 1 : 0,
-      rss: this.appPssBytes,
+      rss: this.appRssBytes,
       expertRam: this.expertRamBytes,
       hit: this.poolHitPct,
       disk: this.diskWeightBytes,
@@ -1471,17 +1463,14 @@ struct Index {
   }
 
   aboutToAppear(): void {
+    this.filesDir = this.context.getApplicationContext().filesDir;
     // 页面初始化视为新的探测会话，不能复用上一轮设备/选中状态。
-    PeerPresenceService.start();
+    PeerPresenceService.start(this.filesDir);
     this.resetPeerDiscovery();
     emitter.off(PEER_START_EVENT);
     emitter.on(PEER_START_EVENT, (data: emitter.EventData) => {
       this.onPeerStartEvent(data);
     });
-    const pendingStart = PeerPresenceService.takePendingStart();
-    if (pendingStart !== null) {
-      this.handlePeerStartRequest(pendingStart);
-    }
     try {
       if (testNapi) {
         try {
@@ -1505,7 +1494,6 @@ struct Index {
     } catch (e) {
       hilog.error(domain, TAG, 'aboutToAppear error: %{public}s', `${e}`);
     }
-    this.filesDir = this.context.getApplicationContext().filesDir;
     const migrationError = migrateLegacyLlamaModels(this.filesDir);
     if (migrationError.length > 0) this.loadStatus = migrationError;
     this.refreshModelList();
@@ -1525,6 +1513,10 @@ struct Index {
       this.roleIsMaster = saved.roleMaster;
       this.port = saved.port;
       this.loadStatus = '配置已保存 · 请求时加载';
+    }
+    const pendingStart = PeerPresenceService.takePendingStart();
+    if (pendingStart !== null) {
+      this.handlePeerStartRequest(pendingStart);
     }
     this.preferredPeerIp = this.selectedPeerIp;
     this.loadDone = false;
@@ -1641,7 +1633,7 @@ struct Index {
             Text('内存').fontSize(18).fontWeight(FontWeight.Bold).fontColor('#334155')
             Text(!isSelf && !this.peerServing ? 'App 内存占用' : '推理内存占用')
               .fontSize(18).fontColor('#334155').margin({ top: 8 })
-            Text(this.fmtGB(isSelf ? this.appPssBytes : this.peerRssBytes)).fontSize(20).fontColor('#0A59F7')
+            Text(this.fmtGB(isSelf ? this.appRssBytes : this.peerRssBytes)).fontSize(20).fontColor('#0A59F7')
             Text('专家缓存').fontSize(18).fontColor('#334155').margin({ top: 8 })
             Text(this.fmtGB(isSelf ? this.expertRamBytes : this.peerExpertRamBytes)).fontSize(20).fontColor('#059669')
             Text('命中').fontSize(18).fontColor('#334155').margin({ top: 8 })

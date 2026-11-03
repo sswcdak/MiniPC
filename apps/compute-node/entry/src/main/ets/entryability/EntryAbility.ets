@@ -25,7 +25,7 @@ class NativeCollaborationWindow implements CollaborationWindow {
 
 export default class EntryAbility extends UIAbility {
   onCreate(): void {
-    PeerPresenceService.start(this.context.filesDir);
+    PeerPresenceService.start(this.context.getApplicationContext().filesDir);
     nearbyChannel.initialize(this.context);
     nearbyBackgroundTask.initialize(this.context);
     nearbyChannel.setActivityListener((connected: boolean): void => nearbyBackgroundTask.setWanted(connected));
