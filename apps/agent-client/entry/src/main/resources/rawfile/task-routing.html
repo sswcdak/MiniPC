@@ -41,6 +41,9 @@
 @keyframes compute-breathe{0%,100%{background-color:#F8FBFF;border-color:#BDCEE4;box-shadow:0 4px 14px #3B61951A,0 1px 3px #3B61950D}50%{background-color:#EFF5FF;border-color:#A9C1E1;box-shadow:0 7px 20px #3B619526,0 2px 5px #3B619512}}
 @media(max-width:480px){.flow-labels{font-size:calc(13px / var(--flow-scale,1))}}
 @media(prefers-reduced-motion:reduce){.flow-compute.is-computing{animation:none}}
+/* tablet-route-state-start */
+.flow-task>span{display:block;-webkit-line-clamp:unset}.flow-task .flow-question{-webkit-line-clamp:2}.flow-task .flow-state{display:block;margin-top:5px;color:#5575A6;font-size:23px;line-height:28px;font-weight:550}.flow-task.waiting{background:#FCFAF3;border-color:#E8DFC6}.flow-task.waiting .flow-state{color:#927139}.flow-task{min-height:160px;grid-template-columns:40px minmax(0,1fr);gap:8px 12px}.flow-task>span{font-size:26px;min-width:0}.flow-task>.flow-type,.flow-task>.flow-photo{width:40px;height:40px}.flow-task b{grid-column:2;font-size:30px;text-align:right}.flow-router-status{position:absolute;display:grid;gap:12px;font-size:22px;line-height:1.35}.flow-router-task{display:grid;grid-template-columns:28px 1fr;gap:6px 8px;padding:12px;border:1px solid #DFE6F0;border-radius:12px;background:#F7F9FD;overflow-wrap:anywhere}.flow-router-task .flow-type{width:28px;height:28px}.flow-router-task strong{font-size:24px;color:#4E6286}.flow-router-task>span{grid-column:1/-1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.flow-router-task small{grid-column:1/-1;font:22px ui-monospace,monospace;color:#6B7F79}.flow-route-notice{margin:0;padding:12px;border:1px solid #E8D6B1;border-radius:12px;background:#FFFAEF;font-size:22px;overflow-wrap:anywhere}.flow-route-notice b{display:block;margin-bottom:6px;color:#89632B}.flow-queue-more{margin:0;color:#6B7F79;font-size:22px}
+/* tablet-route-state-end */
 </style></head><body><svg style="position:absolute;width:0;height:0" aria-hidden="true"><defs><symbol id="flow-phone" viewBox="0 0 58 87"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="46" height="81" rx="8" fill="#fff"/><rect x="10" y="8" width="38" height="65" rx="3" stroke="#d3d8e1" fill="#fbfcff"/><path d="M24 5h10M24 78h10" stroke-linecap="round"/></g></symbol>
 <symbol id="flow-cluster" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="8" width="30" height="48" rx="4"/><rect x="40" y="8" width="30" height="48" rx="4"/><rect x="76" y="8" width="30" height="48" rx="4"/><path d="M19 56v12h72V56M55 56v19" fill="none"/></g><g fill="none" stroke="#bdc5cf" stroke-width="1.3"><path d="M10 21h18M10 33h18M10 45h18M46 21h18M46 33h18M46 45h18M82 21h18M82 33h18M82 45h18"/></g><g fill="#279a73"><circle cx="13" cy="15" r="1.6"/><circle cx="49" cy="15" r="1.6"/><circle cx="85" cy="15" r="1.6"/></g><circle cx="55" cy="75" r="3" fill="white" stroke="currentColor" stroke-width="1.8"/></symbol>
 <symbol id="flow-pc" viewBox="0 0 110 83"><g fill="white" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="16" y="4" width="78" height="52" rx="4"/><rect x="21" y="9" width="68" height="41" rx="1.5" stroke="#cbd1da" stroke-width="1.2" fill="#fcfdfd"/><path d="M16 57h78l12 17q1 4-4 4H8q-5 0-4-4z"/><path d="M4 73h102M26 61h58l5 7H22z" stroke="#bdc5cf" stroke-width="1.1"/><path d="M46 71h18l3 5H43z" stroke="#b2bac5" stroke-width="1"/><path d="M34 61l-2 7m15-7-1 7m15-7 1 7m13-7 2 7" stroke="#d1d6de" stroke-width="1"/></g></symbol>
@@ -129,8 +132,8 @@ function allCalls(){return jobs.concat(remoteCalls);}
     const flowView=document.getElementById('collaboration');
     const historyControls=document.getElementById('historyControls');
     const viewSwitch=document.getElementById('taskViewSwitch');
-    let taskView='flow',queuedCalls=[],mirroredCalls=[],flowSignature='',flowItems=[];
-    const flowSeen=new Map(),flowWaitStarts=new Map(),flowFlights=new Map();
+    let taskView='flow',queuedCalls=[],mirroredCalls=[],flowSignature='',flowItems=[],flowStatusHeight=0;
+    const flowSeen=new Map(),flowFlights=new Map();
     function flowClock(ms){
       const seconds=Math.max(0,Math.floor(ms/1000));
       const pad=n=>String(n).padStart(2,'0');
@@ -149,55 +152,55 @@ function allCalls(){return jobs.concat(remoteCalls);}
       const matches=candidates.filter(device=>device.name===label||(device.role==='self'&&label==='本机'&&compute));
       return matches.length===1?matches[0]:null;
     }
+    function flowState(item){
+      if(item.phase==='waiting-send')return '等待发送';
+      if(item.phase==='sending')return '正在上传';
+      if(!item.executor||item.phase==='routing')return '等待分派';
+      if(item.phase==='queued')return '等待执行';
+      return ({preparing:'准备模型',loading:'加载模型',prefill:'处理输入',generating:'生成中'})[item.stage]||'执行中';
+    }
     function flowData(){
-      const now=Date.now(),items=[],live=allCalls().concat(mirroredCalls.filter(job=>job.phase!=='queued')).filter(job=>job.running);
-      for(const job of live){
-        const executor=job.executionBackend==='cloud'?{id:'cloud-executor'}:resolveFlowDevice(job.executorId,job.source||selfLabel,true);
-        const origin=resolveFlowDevice(job.originId,job.origin,false);
-        const key=jobKey(job)+':'+job.startedAt;
+      const now=Date.now(),items=[];
+      for(const job of allCalls().concat(queuedCalls,mirroredCalls)){
+        if(!job.running&&!['queued','waiting-send'].includes(job.phase))continue;
+        // The ingress is never an executor fallback. Only explicit acceptance/flow evidence draws hop two.
+        const assigned=!!job.source||!!job.executorId;
+        const executor=assigned?(job.executionBackend==='cloud'?{id:'cloud-executor'}:resolveFlowDevice(job.executorId,job.source,true)):null;
+        const origin=resolveFlowDevice(job.originId,job.origin,false),key=jobKey(job);
         const phase=job.phase||'running';
-        const item={key,jobKey:job.key&&job.key.indexOf('mirror:')===0?undefined:jobKey(job),kind:job.kind||((job.image||/^（附图）/.test(job.question||''))?'image':'text'),
+        const item={key,jobKey:job.key&&job.key.indexOf('mirror:')===0?undefined:key,
+          kind:job.kind||((job.image||/^（附图）/.test(job.question||''))?'image':'text'),
           question:summaryText(job.question||''),image:flowPhoto(job.image),model:job.executionBackend==='cloud'?(job.executionModel||'云端模型'):'',
-          phase,at:job.phaseStartedAt||job.startedAt||now,origin:origin&&origin.id,executor:executor&&executor.id,gateway:(resolveFlowDevice(job.executorId,job.source||selfLabel,true)||{}).id};
+          phase,stage:job.stage||'',at:job.phaseStartedAt||job.startedAt||now,origin:origin&&origin.id,
+          executor:executor&&executor.id,gateway:(resolveFlowDevice(job.executorId,job.source,true)||{}).id,
+          notice:job.routeNotice&&now-job.routeNoticeAt<8000?job.routeNotice:'',noticeAt:job.routeNoticeAt};
         items.push(item);
-        // A brief one-shot shows an observed dispatch even when acceptance was faster than painting.
-        const route=key+':'+(item.executor||'');
-        if(!flowSeen.has(route)){flowSeen.set(route,now);if(executor&&(phase==='sending'||now-(job.startedAt||0)<2000))flowFlights.set(route,{...item,until:now+1200});}
-      }
-      for(const job of queuedCalls.concat(mirroredCalls.filter(job=>job.phase==='queued'))){
-        if(now-job.startedAt>130000)continue;
-        items.push({key:'waiting:'+jobKey(job),kind:job.kind||'text',question:summaryText(job.question||''),image:flowPhoto(job.image),
-          phase:'queued',at:job.phaseStartedAt||job.startedAt,
-          origin:(resolveFlowDevice(job.originId,job.origin,false)||{}).id,executor:null});
-      }
-      for(const group of groups){
-        if(!groupRunning(group))continue;
-        for(const child of group.subtasks||[]){
-          if(child.phase!=='queued'||live.some(job=>job.groupKey===group.key&&job.subtaskId===child.id))continue;
-          // An explicit retry-wait notice is more precise than a parent snapshot.
-          if(queuedCalls.some(job=>job.groupKey===group.key&&job.subtaskId===child.id))continue;
-          const key='child:'+group.key+':'+child.id;
-          if(!flowWaitStarts.has(key))flowWaitStarts.set(key,now);
-          const executor=resolveFlowDevice('',child.device,true);
-          items.push({key,groupKey:group.key,childId:child.id,kind:'text',question:summaryText(child.input||child.title||''),
-            phase:'queued',at:flowWaitStarts.get(key),
-            origin:(resolveFlowDevice('',group.origin,false)||{}).id,executor:executor&&executor.id});
+        const previous=flowSeen.get(key);
+        if(item.executor&&phase!=='sending'&&phase!=='waiting-send'&&phase!=='routing'&&
+          (!previous||previous.executor!==item.executor)&&
+          (previous||phase==='queued'||now-(job.startedAt||0)<2000)){
+          flowFlights.set(key,{...item,until:now+1200});
         }
+        flowSeen.set(key,{executor:item.executor,phase});
       }
-      const waitingKeys=new Set(items.filter(item=>item.phase==='queued').map(item=>item.key));
-      for(const key of flowWaitStarts.keys())if(!waitingKeys.has(key))flowWaitStarts.delete(key);
-      for(const [key,flight] of flowFlights)if(flight.until<=now||!items.some(item=>item.key===flight.key))flowFlights.delete(key);
-      while(flowSeen.size>512)flowSeen.delete(flowSeen.keys().next().value);
+      // Remove an old target immediately on reassignment, cancellation, or a return to the router.
+      for(const [key,flight] of flowFlights){
+        const current=items.find(item=>item.key===key);
+        if(flight.until<=now||!current||current.executor!==flight.executor||
+          ['sending','routing','waiting-send'].includes(current.phase))flowFlights.delete(key);
+      }
+      const liveKeys=new Set(items.map(item=>item.key));
+      for(const key of flowSeen.keys())if(!liveKeys.has(key))flowSeen.delete(key);
       return items;
     }
     function flowCard(item){
-      const action=item.jobKey?' data-flow-detail="'+esc(item.jobKey)+'"':item.groupKey?
-        ' data-flow-group="'+esc(item.groupKey)+'" data-flow-child="'+esc(item.childId)+'"':'';
-      const title=flowTitle(item);
+      const action=item.jobKey?' data-flow-detail="'+esc(item.jobKey)+'"':'';
+      const title=flowTitle(item),state=flowState(item),working=item.phase==='running'&&!!item.executor;
       const media=item.image?'<img class="flow-photo" alt="" src="'+item.image+'">':flowIcon(item.kind);
-      const label=title+' · 推理中';
-      return '<'+(action?'button':'div')+' class="flow-task working" data-row-key="'+esc(item.key)+'"'+
-        (action?' type="button"'+action:'')+' aria-label="'+esc(label)+'">'+media+'<span>'+(item.model?'<span class="flow-question">'+esc(title)+'</span><small class="flow-model">'+esc(item.model)+'</small>':esc(title))+'</span><b data-flow-clock="'+esc(item.key)+'">'+flowClock(Date.now()-item.at)+'</b></'+(action?'button':'div')+'>';
+      return '<'+(action?'button':'div')+' class="flow-task'+(working?' working':' waiting')+'" data-row-key="'+esc(item.key)+'"'+
+        (action?' type="button"'+action:'')+' aria-label="'+esc(title+' · '+state)+'">'+media+
+        '<span><span class="flow-question">'+esc(title)+'</span><small class="flow-state">'+esc(state)+'</small>'+
+        (item.model?'<small class="flow-model">'+esc(item.model)+'</small>':'')+'</span><b data-flow-clock="'+esc(item.key)+'">'+flowClock(Date.now()-item.at)+'</b></'+(action?'button':'div')+'>';
     }
     function renderFlow(){
       if(!flowView)return;
@@ -212,42 +215,52 @@ function allCalls(){return jobs.concat(remoteCalls);}
       const cloudActive=flowItems.filter(item=>item.executor==='cloud-executor');
       const executionNodes=cloudActive.length?computers.concat([{id:'cloud-executor',name:'云端推理',role:'cloud',ready:true,jobs:cloudActive.length}]):computers;
       let top=8;const rows=executionNodes.map(device=>{
-        const active=flowItems.filter(item=>item.executor===device.id&&item.phase!=='sending'&&item.phase!=='queued');
+        const active=flowItems.filter(item=>item.executor===device.id&&!['sending','routing','waiting-send'].includes(item.phase));
         const delegated=cloudActive.filter(item=>item.gateway===device.id).length;
-        const busy=active.length>0||Math.max(0,(typeof device.jobs==='number'?device.jobs:0)-delegated)>0;
-        const height=Math.max(device.ready?344:384,96+Math.max(1,active.length)*108),row={device,active,busy,y:top,height};top+=height+36;return row;
+        const busy=active.some(item=>item.phase==='running')||(!active.length&&Math.max(0,(typeof device.jobs==='number'?device.jobs:0)-delegated)>0);
+        const height=Math.max(device.ready?344:384,96+Math.max(1,active.length)*184),row={device,active,busy,y:top,height};top+=height+36;return row;
       });
-      const height=Math.max(460,top-24,sources.length*180),center=height/2;
+      const waiting=flowItems.filter(item=>!item.executor||['sending','routing','waiting-send'].includes(item.phase));
+      const notices=flowItems.filter(item=>item.notice);
+      const height=Math.max(460,top-24,sources.length*180,flowStatusHeight?300+flowStatusHeight*2:0),center=height/2;
       const sourceY=new Map(sources.map((source,i)=>[source.id,(i+.5)*height/Math.max(1,sources.length)]));
       const targetY=new Map(rows.map(row=>[row.device.id,row.y+row.height/2]));
       const sourcePath=y=>'M'+(68*spread+52)+' '+y+'H'+(158*spread-10)+'Q'+(158*spread)+' '+y+' '+(158*spread)+' '+(y+(y<center?12:-12))+'V'+(center+(y<center?-12:12))+'Q'+(158*spread)+' '+center+' '+(158*spread+10)+' '+center+'H'+(232*spread-42);
       const targetPath=y=>'M'+(232*spread+42)+' '+center+'H'+(310*spread-10)+'Q'+(310*spread)+' '+center+' '+(310*spread)+' '+(center+(y<center?-12:12))+'V'+(y+(y<center?12:-12))+'Q'+(310*spread)+' '+y+' '+(310*spread+10)+' '+y+'H'+left;
       const flights=Array.from(flowFlights.values());
       for(const item of flowItems.filter(item=>item.phase==='sending'))if(!flights.some(flight=>flight.key===item.key))flights.push(item);
-      const activeSource=new Set(flights.map(item=>item.origin||'local-source')),activeTarget=new Set(flights.map(item=>item.executor));
-      const signature=JSON.stringify({width,computers,sources,items:flowItems.filter(item=>item.phase!=='queued').map(item=>[item.key,item.kind,item.phase,item.origin,item.executor,item.gateway,item.model||'',item.question||'',item.image?1:0]),flights:flights.map(item=>[item.key,item.origin,item.executor])});
+      const activeSource=new Set(flights.filter(item=>item.phase==='sending').map(item=>item.origin||'local-source')),activeTarget=new Set(flights.filter(item=>item.phase!=='sending').map(item=>item.executor));
+      const signature=JSON.stringify({width,height,computers,sources,items:flowItems.map(item=>[item.key,item.kind,item.phase,item.stage,item.at,item.origin,item.executor,item.gateway,item.model||'',item.question||'',item.image?1:0,item.notice]),flights:flights.map(item=>[item.key,item.origin,item.executor])});
       if(signature!==flowSignature){
         flowSignature=signature;
         const wires='<svg class="flow-wires" viewBox="0 0 '+width+' '+height+'" aria-hidden="true"><defs><marker id="flow-arrow" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="context-stroke" stroke-width="1.6"/></marker></defs>'+
           sources.map(source=>'<path class="flow-wire '+(activeSource.has(source.id)?'active':'')+'" d="'+sourcePath(sourceY.get(source.id))+'" marker-end="url(#flow-arrow)"/>').join('')+
-          rows.map(row=>'<path class="flow-wire '+(row.device.role==='cloud'?'cloud ':'')+(activeTarget.has(row.device.id)?'active':'')+'" d="'+targetPath(targetY.get(row.device.id))+'" marker-end="url(#flow-arrow)"/>').join('')+'</svg>';
+          rows.map(row=>'<path data-flow-target="'+esc(row.device.id)+'" class="flow-wire '+(row.device.role==='cloud'?'cloud ':'')+(activeTarget.has(row.device.id)?'active':'')+'" d="'+targetPath(targetY.get(row.device.id))+'" marker-end="url(#flow-arrow)"/>').join('')+'</svg>';
         const phones=sources.map(source=>'<div class="flow-phone" data-row-key="source:'+esc(source.id)+'" style="left:'+(68*spread-60)+'px;top:'+(sourceY.get(source.id)-58)+'px"><svg aria-hidden="true"><use href="#flow-phone"/></svg><span>'+esc(source.id==='local-source'?'本机 / 未知来源':publicJobName(source.name,'chat'))+'</span></div>').join('');
         const router='<div class="flow-router '+(flights.length?'active':'')+'" style="left:'+(232*spread-42)+'px;top:'+(center-35)+'px"><svg aria-hidden="true" viewBox="0 0 48 36"><rect x="2" y="13" width="10" height="10" rx="2"/><rect x="35" y="2" width="10" height="10" rx="2"/><rect x="35" y="24" width="10" height="10" rx="2"/><path d="M12 18h9q4 0 4-4v-3q0-4 4-4h6M21 18q4 0 4 4v3q0 4 4 4h6"/></svg><span>路由中心<br>('+esc(computePublicName(computers.find(device=>device.name==='算力设备1')||{name:'算力设备1'}))+')</span></div>';
         const boxes=rows.map(row=>{
           const d=row.device;
-          if(d.role==='cloud')return '<section class="flow-compute flow-cloud" data-row-key="cloud-executor" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="云端路由"><div class="flow-computer"><svg class="flow-cloud-icon" viewBox="0 0 100 72" aria-hidden="true"><path d="M25 57h52a15 15 0 0 0 1-30 25 25 0 0 0-48-7 18 18 0 0 0-5 37Z"/><path d="M39 39h22m-7-7 7 7-7 7"/></svg><span>云端推理</span><small>已路由至云端</small></div><div class="flow-lane busy"><h3>推理中 · '+row.active.length+' 个任务</h3>'+row.active.map(flowCard).join('')+'</div></section>';
+          if(d.role==='cloud')return '<section class="flow-compute flow-cloud" data-row-key="cloud-executor" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="云端路由"><div class="flow-computer"><svg class="flow-cloud-icon" viewBox="0 0 100 72" aria-hidden="true"><path d="M25 57h52a15 15 0 0 0 1-30 25 25 0 0 0-48-7 18 18 0 0 0-5 37Z"/><path d="M39 39h22m-7-7 7 7-7 7"/></svg><span>云端推理</span><small>已路由至云端</small></div><div class="flow-lane busy"><h3>'+ (row.busy?'执行中':'等待执行')+' · '+row.active.length+' 个任务</h3>'+row.active.map(flowCard).join('')+'</div></section>';
           if(d.pendingInfo)return '<section class="flow-compute is-pending" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="算力设备，信息待同步"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#flow-pc"/></svg></div><span>算力设备</span><small>已计入在线总数</small></div><div class="flow-lane"><h3>信息待同步</h3><p class="flow-pending-note">等待路由中心同步<br>设备名称与模型</p></div></section>';
           const mem=typeof d.memUsage==='number'&&Number.isFinite(d.memUsage)&&d.memUsage>=0?Math.min(100,d.memUsage):null;
           const memory='<div class="flow-memory" aria-label="内存 '+(mem===null?'未采集':mem+'%')+'"><i><em style="width:'+(mem===null?0:mem)+'%;background:'+(mem>50?'#e1b43b':'#279a73')+'"></em></i><span>内存<b>'+(mem===null?'—':Math.round(mem)+'%')+'</b></span></div>';
-          return '<section class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#'+(isLlamaCluster(d)?'flow-cluster':'flow-pc')+'"/></svg>'+(d.role==='self'&&!isLlamaCluster(d)?'<span class="flow-pc-local">本机</span>':'')+'</div><span title="'+esc(computeDisplayName(d))+'">'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'推理中':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
+          return '<section class="flow-compute'+(row.busy?' is-computing':'')+'" data-row-key="compute:'+esc(d.id)+'" style="left:'+left+'px;top:'+row.y+'px;width:'+rowWidth+'px;min-height:'+row.height+'px" aria-label="'+esc(computeDisplayName(d))+'"><div class="flow-computer"><div class="flow-pc-mark"><svg aria-hidden="true"><use href="#'+(isLlamaCluster(d)?'flow-cluster':'flow-pc')+'"/></svg>'+(d.role==='self'&&!isLlamaCluster(d)?'<span class="flow-pc-local">本机</span>':'')+'</div><span title="'+esc(computeDisplayName(d))+'">'+esc(computeDisplayName(d))+'</span>'+memory+(!d.ready?'<small>连接中</small>':'')+'</div><div class="flow-lane'+(row.busy?' busy':'')+'"><h3>'+(row.busy?'执行中':row.active.length?'等待执行':'在线')+'</h3>'+row.active.map(flowCard).join('')+(!row.active.length&&row.busy?'<span class="flow-idle">设备忙碌 · 无任务明细</span>':'')+'</div></section>';
         }).join('');
-        const packets=flights.filter(item=>targetY.has(item.executor)).map(item=>{
-          const y=sourceY.get(item.origin||'local-source')||center;
-          const route=sourcePath(y)+'L'+(232*spread+42)+' '+center+targetPath(targetY.get(item.executor)).replace(/^M[^H]+/,'');
-          return '<div class="flow-packet" data-row-key="packet:'+esc(item.key)+'" aria-label="'+(item.kind==='image'?'图片':'文本')+'任务正在分派" style="offset-path:path(\''+route+'\')">'+flowIcon(item.kind)+'</div>';
+        const routerStatus='<aside class="flow-router-status" style="left:'+(142*spread)+'px;top:'+(center+140)+'px;width:'+(168*spread)+'px" aria-live="polite">'+
+          notices.slice(-2).map(item=>'<p class="flow-route-notice" data-row-key="notice:'+esc(item.key)+'"><b>任务改派</b>'+esc(item.notice)+'</p>').join('')+
+          waiting.slice(0,3).map(item=>'<div class="flow-router-task" data-row-key="waiting:'+esc(item.key)+'" aria-label="'+esc(flowTitle(item)+' · '+flowState(item))+'">'+flowIcon(item.kind)+'<strong>'+esc(flowState(item))+'</strong><span>'+esc(flowTitle(item))+'</span><small data-flow-clock="'+esc(item.key)+'">'+flowClock(Date.now()-item.at)+'</small></div>').join('')+
+          (waiting.length>3?'<p class="flow-queue-more">另有 '+(waiting.length-3)+' 个任务等待</p>':'')+'</aside>';
+        const packets=flights.filter(item=>item.phase==='sending'||targetY.has(item.executor)).map(item=>{
+          const upload=item.phase==='sending',y=sourceY.get(item.origin||'local-source')||center;
+          const route=upload?sourcePath(y):targetPath(targetY.get(item.executor));
+          return '<div class="flow-packet" data-flow-leg="'+(upload?'ingress':'executor')+'" data-flow-target="'+esc(upload?'router':item.executor)+'" data-row-key="packet:'+esc(item.key)+'" aria-label="'+(item.kind==='image'?'图片':'文本')+(upload?'任务正在上传至路由中心':'任务正在分派至执行设备')+'" style="offset-path:path(\''+route+'\')">'+flowIcon(item.kind)+'</div>';
         }).join('');
-        renderMarkup(flowView,'<div class="flow-labels" data-row-key="labels"><span>任务发起</span><span>路由分发</span><span>算力执行</span></div><div class="flow-scene" data-row-key="scene" style="width:'+width+'px;height:'+height+'px">'+wires+phones+router+boxes+packets+(!computers.length?'<div class="flow-empty">等待算力设备上线</div>':'')+'</div>');
+        renderMarkup(flowView,'<div class="flow-labels" data-row-key="labels"><span>任务发起</span><span>路由分发</span><span>算力执行</span></div><div class="flow-scene" data-row-key="scene" style="width:'+width+'px;height:'+height+'px">'+wires+phones+router+routerStatus+boxes+packets+(!computers.length?'<div class="flow-empty">等待算力设备上线</div>':'')+'</div>');
       }
+      // Measure the waiting panel so a burst of queued tasks cannot extend outside the fitted scene.
+      const panel=flowView.querySelector&&flowView.querySelector('.flow-router-status');
+      const panelHeight=panel?Math.ceil(panel.offsetHeight):0;
+      if(Math.abs(panelHeight-flowStatusHeight)>1){flowStatusHeight=panelHeight;flowSignature='';renderFlow();return;}
       updateFlowClocks();
     }
     function updateFlowClocks(){
@@ -282,8 +295,8 @@ window.onNativeEvent=function(event){devices=event.devices||[];jobs=event.jobs||
 window.addEventListener('resize',()=>{flowSignature='';renderFlow();fitFlow();});
 if(typeof ResizeObserver!=='undefined')new ResizeObserver(fitFlow).observe(viewport);
 flowView.addEventListener('click',event=>{const button=event.target.closest('[data-flow-detail]');if(!button)return;
- const job=jobs.find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
- document.getElementById('detailText').textContent=(job.question||'推理请求')+'\n执行设备：'+(job.source||'等待分派')+'\n状态：'+(job.phase||'running');
+ const job=jobs.concat(queuedCalls).find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
+ document.getElementById('detailText').textContent=(job.question||'推理请求')+'\n执行设备：'+(job.source||'等待分派')+'\n状态：'+flowState(flowItems.find(item=>item.key===jobKey(job))||{phase:job.phase,executor:job.source,stage:job.stage});
  document.getElementById('detail').hidden=false;
 });
 document.getElementById('closeDetail').addEventListener('click',()=>document.getElementById('detail').hidden=true);

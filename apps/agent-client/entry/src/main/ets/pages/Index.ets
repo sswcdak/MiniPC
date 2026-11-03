@@ -39,7 +39,7 @@ import {
 import { getLocalLlmBinding } from '../llm/LocalLlmBinding';
 import { nearbyChannel } from '../nearby/LinkEnhanceChannel';
 import { inferenceClient, INFERENCE_STOPPED } from '../model/InferenceClient';
-import { DeviceInfoEntry, TaskChildSnapshot, TaskSnapshot, WireMessage } from '../protocol/ChatProtocol';
+import { DeviceInfoEntry, RoutingCall, TaskChildSnapshot, TaskSnapshot, WireMessage } from '../protocol/ChatProtocol';
 import { ConcurrentChatTask, ChatTaskInput, ChatTaskUpdate } from '../model/ConcurrentChatTask';
 import { TaskConversationLedger } from '../model/TaskConversationLedger';
 import { TaskReporter } from '../model/TaskReporter';
@@ -532,7 +532,11 @@ struct Index {
     this.deviceInfoPoller.poll(this.pageActive ? nearbyChannel.readyEpoch() : -1);
     const load = inferenceClient.clusterLoad();
     const connected = nearbyChannel.isConnected();
-    const calls = inferenceClient.routingCalls();
+    const waiting = this.taskQueue.map((task: TabletQueuedTask): RoutingCall => ({
+      id: 'local-' + task.id, question: task.display, image: task.imagePayload, device: '',
+      phase: 'waiting-send', startedAt: task.submittedAt, phaseStartedAt: task.submittedAt
+    }));
+    const calls = inferenceClient.routingCalls().concat(waiting);
     this.routingJson = this.routingStore.snapshot(calls, nearbyChannel.selfLabel(),
       nearbyChannel.localUid(), connected, nearbyChannel.readyEpoch(), nearbyChannel.connectedComputeInfo(), load.total);
     this.clusterSummary = this.routingStore.summary(load, connected, calls);

@@ -128,7 +128,7 @@ const pageBox = {exports: {}, nearbyChannel: {readyEpoch: () => connected ? 7 : 
   inferenceClient: {clusterLoad: () => textLoad, routingCalls: () => []}};
 vm.runInNewContext(transpileSource('class Page {' + pageSource.slice(refreshStart, refreshEnd) + '} exports.Page=Page;'), pageBox);
 const page = new pageBox.exports.Page();
-page.pageActive = true; page.routingStore = summaryStore; page.deviceInfoPoller = {poll() {}};
+page.pageActive = true; page.taskQueue = []; page.routingStore = summaryStore; page.deviceInfoPoller = {poll() {}};
 summaryStore.receive({type: 'deviceInfoSync', devices: [visionHub, llamaWorker, textWorker]}, 7, hub);
 page.refreshRoutingView();
 assert.equal(page.clusterSummary, '在线3台，文本2/2台，多模态1/1台');

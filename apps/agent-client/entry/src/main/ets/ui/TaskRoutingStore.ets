@@ -11,6 +11,7 @@ interface FlowNotice {
 interface FlowEntry { notice: FlowNotice; receivedAt: number; }
 interface RouteJob {
   executorId?: string; executionBackend?: string; executionModel?: string;
+  ingressId?: string; ingress?: string; stage?: string; routeNotice?: string; routeNoticeAt?: number;
   id: string; key: string; source: string; origin: string; originId: string;
   question: string; kind: string; image: string; phase: string; running: boolean;
   startedAt: number; phaseStartedAt: number;
@@ -153,22 +154,26 @@ export class TaskRoutingStore {
       }
       // An accepted public device label is evidence even before the first roster arrives.
       if (call.device.length > 0 && !devices.some((device: RouteDevice): boolean => device.name === call.device)) {
-        devices.push({ id: 'accepted:' + call.device, name: call.device, role: 'compute', ready: true, jobs: 1 });
+        devices.push({ id: 'accepted:' + call.device, name: call.device, role: 'compute', ready: true,
+          jobs: call.phase === 'running' ? 1 : 0 });
       }
-      const job: RouteJob = { id: call.id, key: 'client:' + call.id,
-        source: call.device || (call.phase === 'sending' && connectedHub !== null ? connectedHub.name || '算力设备' : ''),
+      const job: RouteJob = { id: call.id, key: 'client:' + (call.displayId || call.id),
+        source: call.device, ingressId: connectedHub?.deviceUid || connectedHub?.id,
+        ingress: connectedHub?.name, stage: call.stage, routeNotice: call.routeNotice, routeNoticeAt: call.routeNoticeAt,
         origin: selfLabel, originId: selfUid, question: call.question, kind: call.image.length > 0 ? 'image' : 'text',
         image: call.image.length > 0 ? 'data:image/jpeg;base64,' + call.image : '', phase: call.phase,
-        running: call.phase !== 'queued', startedAt: call.startedAt, phaseStartedAt: call.startedAt };
+        running: call.phase !== 'queued' && call.phase !== 'waiting-send',
+        startedAt: call.startedAt, phaseStartedAt: call.phaseStartedAt || call.startedAt };
       const evidence = Array.from(this.flows.values()).find((entry: FlowEntry): boolean =>
         (entry.notice.originId === selfUid || (!entry.notice.originId && entry.notice.origin === selfLabel)) &&
         entry.notice.key.includes(':' + call.id + ':'));
-      if (evidence !== undefined) {
+      if (evidence !== undefined && call.device && evidence.notice.source === call.device) {
         job.executionBackend = evidence.notice.executionBackend;
         job.executionModel = evidence.notice.executionModel;
+        // A delayed flow snapshot cannot override a newer acceptance or reassign an unassigned call.
         job.executorId = evidence.notice.executorId;
       }
-      if (call.phase === 'queued') { queued.push(job); } else { jobs.push(job); }
+      if (call.phase === 'queued' || call.phase === 'waiting-send') { queued.push(job); } else { jobs.push(job); }
     }
     // Older hubs report the cluster size without publishing device identities.
     // Keep that missing information visible without assigning slots or tasks to it.

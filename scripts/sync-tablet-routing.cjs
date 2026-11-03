@@ -14,6 +14,7 @@ const previous = fs.existsSync(target) ? fs.readFileSync(target, 'utf8').replace
 const hasCloudAdapter = previous.includes('.flow-cloud{');
 const cloudCss = hasCloudAdapter ? (previous.match(/^    \.flow-cloud\{.*$/m)?.[0] || '') : '';
 const pendingCss=previous.split('\n').filter(line=>/^\.flow-(compute\.is-pending|pending-note)/.test(line)).join('\n');
+const routeStateCss=previous.match(/\/\* tablet-route-state-start \*\/[\s\S]*?\/\* tablet-route-state-end \*\//)?.[0] || '';
 const css = part('    .flow-view{', '</style>') + '\n' + cloudCss + '\n' + pendingCss;
 const symbols = [...source.matchAll(/<symbol id="flow-[\s\S]*?<\/symbol>/g)].map(m=>m[0]).join('\n');
 let helpers = part('    function summaryText(', '    function focusWithoutScroll(')+
@@ -80,8 +81,8 @@ window.onNativeEvent=function(event){devices=event.devices||[];jobs=event.jobs||
 window.addEventListener('resize',()=>{flowSignature='';renderFlow();fitFlow();});
 if(typeof ResizeObserver!=='undefined')new ResizeObserver(fitFlow).observe(viewport);
 flowView.addEventListener('click',event=>{const button=event.target.closest('[data-flow-detail]');if(!button)return;
- const job=jobs.find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
- document.getElementById('detailText').textContent=(job.question||'推理请求')+'\\n执行设备：'+(job.source||'等待分派')+'\\n状态：'+(job.phase||'running');
+ const job=jobs.concat(queuedCalls).find(j=>jobKey(j)===button.getAttribute('data-flow-detail'));if(!job)return;
+ document.getElementById('detailText').textContent=(job.question||'推理请求')+'\\n执行设备：'+(job.source||'等待分派')+'\\n状态：'+flowState(flowItems.find(item=>item.key===jobKey(job))||{phase:job.phase,executor:job.source,stage:job.stage});
  document.getElementById('detail').hidden=false;
 });
 document.getElementById('closeDetail').addEventListener('click',()=>document.getElementById('detail').hidden=true);
@@ -118,6 +119,7 @@ ${css}
 @keyframes compute-breathe{0%,100%{background-color:#F8FBFF;border-color:#BDCEE4;box-shadow:0 4px 14px #3B61951A,0 1px 3px #3B61950D}50%{background-color:#EFF5FF;border-color:#A9C1E1;box-shadow:0 7px 20px #3B619526,0 2px 5px #3B619512}}
 @media(max-width:480px){.flow-labels{font-size:calc(13px / var(--flow-scale,1))}}
 @media(prefers-reduced-motion:reduce){.flow-compute.is-computing{animation:none}}
+${routeStateCss}
 </style></head><body><svg style="position:absolute;width:0;height:0" aria-hidden="true"><defs>${symbols}</defs></svg>
 <div id="viewport"><div id="space"></div><div id="stage"><section id="collaboration" class="flow-view" aria-label="设备协同运行图"></section></div></div>
 <div id="detail" hidden><button id="closeDetail">关闭</button><p id="detailText"></p></div>

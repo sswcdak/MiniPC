@@ -308,6 +308,11 @@ export class InferenceRelay {
       entry.originRequestId, why, entry.workerName, target.label, entry.attempts + 1);
     // The lost attempt's card closes as failed; the new attempt opens its own.
     this.events.end(entry.originRequestId, entry.originEpoch, '', true);
+    // Explain an actual scheduler retry to the requester; an ordinary hub→worker handoff never emits this.
+    const reason = why === 'worker lost' ? '执行设备连接中断' :
+      why.includes('MODEL_EXECUTION_FAILED') ? '模型执行失败' : '执行被取消';
+    this.toChat({ type: 'infer.status', version: 2, requestId: entry.originRequestId,
+      state: 'rerouting', source: entry.workerName, device: target.label, text: reason }, entry);
     this.dispatch(request, entry.originEpoch, target, entry.tried, entry.attempts + 1);
     return true;
   }

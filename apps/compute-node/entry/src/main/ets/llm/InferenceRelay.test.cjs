@@ -411,7 +411,12 @@ test('a worker lost mid-request: the request is re-issued to another idle device
   h.relay.handleFromChat(request('r1'), 5);
   const first = h.to(7, 'infer.request')[0];
   h.relay.handleFromWorker({ type: 'infer.accepted', requestId: first.requestId, state: 'running' }, 7);
+  assert.equal(h.to(5, 'infer.status').filter(m=>m.state==='rerouting').length, 0, 'ordinary forwarding is not a reroute');
   h.relay.workerDropped(7);
+  assert.deepEqual(h.to(5, 'infer.status').find(m=>m.state==='rerouting'), {
+    type: 'infer.status', version: 2, requestId: 'r1', state: 'rerouting',
+    source: '算力设备2', device: '算力设备3', text: '执行设备连接中断'
+  });
   assert.equal(errorsToChat(h).length, 0);
   const second = h.to(8, 'infer.request');
   assert.equal(second.length, 1);

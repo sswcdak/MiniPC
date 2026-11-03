@@ -24,11 +24,17 @@ export const MAX_IMAGE_BASE64: number = 24000;
 export interface ChatMessage { role: string; content: string; }
 export interface RoutingCall {
   id: string;
+  /** Stable display identity; wire request IDs may change on a pre-acceptance retry. */
+  displayId?: string;
   question: string;
   image: string;
   device: string;
   phase: string;
   startedAt: number;
+  phaseStartedAt?: number;
+  stage?: string;
+  routeNotice?: string;
+  routeNoticeAt?: number;
 }
 export interface DeviceInfoEntry {
   capabilities?: string[];

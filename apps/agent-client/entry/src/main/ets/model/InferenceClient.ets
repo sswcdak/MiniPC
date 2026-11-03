@@ -53,6 +53,12 @@ export interface InferSplit {
 
 class StreamState {
   requestId: string = '';
+  displayId: string = '';
+  createdAt: number = 0;
+  phaseStartedAt: number = 0;
+  stage: string = '';
+  routeNotice: string = '';
+  routeNoticeAt: number = 0;
   prompt: string = '';
   owner: string = '';
   epoch: number = -1;
@@ -175,9 +181,11 @@ class InferenceClient {
   routingCalls(): RoutingCall[] {
     return Array.from(this.calls.values()).concat(this.waitingCalls).concat(this.queued).map((state: StreamState): RoutingCall => ({
       id: state.requestId || state.hooks.taskId || 'pending', question: state.hooks.label || '推理请求',
+      displayId: state.displayId,
       image: state.image, device: state.device,
-      phase: state.waiting || this.queued.includes(state) ? 'queued' : state.phase,
-      startedAt: state.started || Date.now()
+      phase: this.queued.includes(state) ? 'waiting-send' : state.waiting ? 'routing' : state.phase,
+      startedAt: state.createdAt || state.started || Date.now(), phaseStartedAt: state.phaseStartedAt,
+      stage: state.stage, routeNotice: state.routeNotice, routeNoticeAt: state.routeNoticeAt
     }));
   }
 
@@ -331,6 +339,9 @@ class InferenceClient {
         '/' + promptBudget.toString() + ' bytes），未发送请求，请缩小任务或文件范围'));
     }
     const state = new StreamState();
+    state.displayId = this.nextId('route');
+    state.createdAt = Date.now();
+    state.phaseStartedAt = state.createdAt;
     state.prompt = prompt;
     state.owner = hooks.owner !== undefined ? hooks.owner : '';
     state.hooks = hooks;
@@ -400,7 +411,8 @@ class InferenceClient {
     state.next = 1;
     state.text = '';
     state.accepted = false;
-    state.device = ''; state.phase = 'sending';
+    state.device = '';
+    this.routePhase(state, 'sending', '');
     state.waiting = false;
     this.calls.set(requestId, state);
     clearTimeout(state.timer);
@@ -578,8 +590,20 @@ class InferenceClient {
       if (typeof message.state === 'string' && typeof message.requestId === 'string') {
         const pending = this.calls.get(message.requestId);
         if (pending !== undefined && (epoch === undefined || pending.epoch === epoch)) {
-          pending.phase = message.state === 'queued' ? 'queued' : 'running';
-          pending.hooks.onPhase?.(message.state);
+          if (message.state === 'rerouting') {
+            // Display-only evidence from the hub's existing retry path. It never starts a retry here.
+            const previous = pending.device || (message.source || '').substring(0, 128);
+            const target = message.device || '';
+            pending.routeNotice = previous + '不可用' + (target ? '，改派' + target : '，重新分派') +
+              (message.text ? '（' + message.text.substring(0, 128) + '）' : '');
+            pending.routeNoticeAt = Date.now();
+            pending.device = '';
+            this.routePhase(pending, 'routing', '');
+          } else if (['queued', 'preparing', 'loading', 'prefill', 'generating'].includes(message.state)) {
+            this.routePhase(pending, message.state === 'queued' ? (pending.device ? 'queued' : 'routing') :
+              (pending.device ? 'running' : 'routing'), message.state);
+            pending.hooks.onPhase?.(message.state);
+          }
         }
       }
       return;
@@ -599,12 +623,19 @@ class InferenceClient {
     }
     if (message.type === 'infer.accepted') {
       call.accepted = true;
-      call.device = message.device || ''; call.phase = 'running';
+      // Some workers omit the device on their second acknowledgement; retain the hub's assignment.
+      if (message.device) {
+        if (call.device !== message.device) call.phaseStartedAt = Date.now();
+        call.device = message.device;
+      }
+      this.routePhase(call, call.device ? (message.state === 'queued' ? 'queued' : 'running') : 'routing',
+        message.state || 'running');
       this.arm(call);
       const accepted = call.hooks.onAccepted;
       if (accepted !== undefined && typeof message.device === 'string' && message.device.length > 0) {
         accepted(message.device);
       }
+      if (message.state === 'queued') call.hooks.onPhase?.('queued');
       return;
     }
     if (message.type === 'infer.delta' && typeof message.seq === 'number' && typeof message.text === 'string') {
@@ -615,6 +646,7 @@ class InferenceClient {
       }
       call.text += message.text;
       call.next += 1;
+      this.routePhase(call, call.device ? 'running' : 'routing', 'generating');
       this.arm(call);
       const preview = call.hooks.onDelta;
       const shown = repairUtf8FromSource(call.text, call.prompt);
@@ -659,10 +691,18 @@ class InferenceClient {
     }
   }
 
+  private routePhase(state: StreamState, phase: string, stage: string): void {
+    if (state.phase !== phase || state.stage !== stage) state.phaseStartedAt = Date.now();
+    state.phase = phase;
+    state.stage = stage;
+  }
+
   /** Parks a refused request; it is re-sent on the next idle report or after RETRY_INTERVAL_MS. */
   private wait(state: StreamState): void {
     clearTimeout(state.timer);
     state.waiting = true;
+    state.device = '';
+    this.routePhase(state, 'routing', '');
     if (state.queuedSince === 0) state.queuedSince = Date.now();
     this.calls.delete(state.requestId);
     clearTimeout(state.retryTimer);
